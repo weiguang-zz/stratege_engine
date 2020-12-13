@@ -1,11 +1,12 @@
-from enum import Enum
-from pandas import Timestamp, DatetimeIndex
 from abc import *
+from enum import Enum
+from typing import *
 
-from pandas._libs.tslibs.timedeltas import Timedelta
+from pandas import Timestamp, DatetimeIndex, DataFrame
+from pandas import Timedelta
 from trading_calendars import TradingCalendar
 
-from main.domain.engine import StrategyEngine
+from main.domain.data_portal import TSDataReader, StreamDataCallback, TSData
 
 
 class EventType(Enum):
@@ -60,10 +61,16 @@ class EventBus(object):
         self.subscribers.append(subscribe)
 
 
+class EventSubscriber(object, metaclass=ABCMeta):
+    @abstractmethod
+    def on_event(self, event: Event):
+        pass
+
+
 class EventProducer(metaclass=ABCMeta):
 
     @abstractmethod
-    def start_listen(self, subscriber: StrategyEngine):
+    def start_listen(self, subscriber: EventSubscriber):
         pass
 
     @abstractmethod
@@ -143,7 +150,34 @@ class TimeEventProducer(EventProducer):
         pass
 
 
+class TSDataEventProducer(EventProducer, StreamDataCallback):
+    """
+    默认的数据事件产生器，要定义一个数据事件产生器，只需要指定供应商名和时序类型名即可
+    """
+
+    def on_data(self, data: TSData):
+        pass
+
+    def start_listen(self, subscriber):
+        self.data_reader.listen(self)
+
+    def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):
+        df: DataFrame = self.data_reader.history_data(self.codes, visible_time_start, visible_time_end)
+        events = []
+        for row in df.iterrows():
+            event = Event(event_type=EventType.DATA, sub_type=self.sub_type, visible_time=row['visible_time'], data=row)
+            events.append(event)
+        return events
+
+    def __init__(self, provider_name: str, ts_type_name: str, codes: List[str]):
+        data_reader: TSDataReader = TSDataReader(provider_name, ts_type_name)
+        self.sub_type = f"{provider_name}_{ts_type_name}"
+        self.data_reader = data_reader
+        self.codes = codes
+
+
 if __name__ == "__main__":
-    from trading_calendars import  get_calendar
+    from trading_calendars import get_calendar
+
     calendar: TradingCalendar = get_calendar("NYSE")
     print("done")

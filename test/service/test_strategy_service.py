@@ -5,7 +5,7 @@ from main.domain.data_portal import TSDataReader, Bar, DataPortal
 
 from main.domain.engine import AbstractStrategy, BacktestAccount, AbstractMatchService
 from main.domain.event_producer import Event, EventType, TimeEventType, EventProducer, TimeEventProducer, DateRules, \
-    TimeRules
+    TimeRules, TSDataEventProducer
 from typing import List, Dict
 from trading_calendars import get_calendar
 import logging
@@ -47,7 +47,16 @@ class SimpleTestStrategy(AbstractStrategy):
         super(SimpleTestStrategy, self).__init__([ep], calendar)
 
 
+class TestStrategy2(AbstractStrategy):
 
+    def on_event(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
+        pass
+
+    def __init__(self):
+        calendar = get_calendar("NYSE")
+        ep: EventProducer = TSDataEventProducer("","")
+
+        super(TestStrategy2, self).__init__()
 
 
 class Test(TestCase):

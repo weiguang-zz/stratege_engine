@@ -41,7 +41,8 @@ class Order(object):
         self.order_type = order_type
         self.direction = direction
         self.place_time = time
-        self.filled_time = None
+        self.start_filled_time = None
+        self.end_filled_time = None
         self.filled = 0
         self.limit_price = limit_price
         self.status = OrderStatus.CREATED
@@ -96,7 +97,8 @@ class BacktestAccount(AbstractAccount):
     def place_order(self, order: Order):
         self.orders.append(order)
 
-    def order_filled(self, order: Order, quantity: float, price: float, start_filled_time: Timestamp):
+    def order_filled(self, order: Order, quantity: float, price: float, start_filled_time: Timestamp,
+                     end_filled_time: Timestamp):
         """
         :param order: 订单
         :param quantity: 成交数量
@@ -111,7 +113,8 @@ class BacktestAccount(AbstractAccount):
         if order.filled != order.quantity:
             raise RuntimeError("订单成交数据错误")
         order.status = OrderStatus.FILLED
-        order.filled_time = start_filled_time
+        order.start_filled_time = start_filled_time
+        order.end_filled_time = end_filled_time
         # 扣减现金，增加持仓
         if order.direction == OrderDirection.SELL:
             quantity = -quantity

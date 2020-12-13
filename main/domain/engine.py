@@ -1,15 +1,14 @@
 from abc import ABCMeta, abstractmethod
+from typing import List
 
+import pandas as pd
 from pandas import Timestamp, Timedelta, DataFrame, DatetimeIndex
 from trading_calendars import TradingCalendar
 
 from main.domain.account import AbstractAccount, BacktestAccount, Order, OrderType, OrderDirection
-from main.domain.data_portal import DataPortal, TSDataLoader
-from main.domain.event_producer import Event, EventProducer, EventBus, TimeEventProducer, DateRules, TimeRules, \
-    EventType
-from typing import List, Dict
-import pandas as pd
-from trading_calendars import get_calendar
+from main.domain.data_portal import DataPortal, HistoryDataLoader
+from main.domain.event_producer import Event, EventProducer, TimeEventProducer, DateRules, TimeRules, \
+    EventType, AccountEventType
 
 
 class AbstractMatchService(EventProducer, metaclass=ABCMeta):
@@ -28,40 +27,48 @@ class AbstractMatchService(EventProducer, metaclass=ABCMeta):
         raise RuntimeError("不支持的操作")
         pass
 
+    @abstractmethod
     def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):
-        events = []
-        for dt in self.match_times[visible_time_start, visible_time_end]:
-            event = Event(event_type=EventType.TIME, sub_type="match_time", visible_time=dt, data={})
-            events.append(event)
-        return events
-
-    def __init__(self, account: BacktestAccount, price_data: TSDataLoader, match_times: DatetimeIndex):
-        self.account = account
-        self.price_data = price_data
-        self.match_times = match_times
+        pass
 
 
-class IBAmericaMinBarMatchService(AbstractMatchService):
+class MinBarMatchService(AbstractMatchService):
+    """
+    以分钟的bar作为底层数据的撮合服务， 通过指定calendar和bar_loader, 可以支持不同的交易所
+    """
+
+    def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):
+        # 获取交易时间段的所有分钟返回
+        trading_minutes = self.calendar.minutes_in_range(visible_time_start, visible_time_end)
+        opens = self.calendar.session_opens_in_range(visible_time_start, visible_time_end) - Timedelta(minutes=1)
+        trading_minutes = trading_minutes.union(pd.DatetimeIndex(opens.values, tz="UTC"))
+        return trading_minutes
 
     def match(self, order: Order, time: Timestamp):
         if order.place_time.second != 0:
             raise RuntimeError("下单时间只能是分钟开始")
+        c1: Timestamp = self.calendar.previous_close(time)
+        o1: Timestamp = self.calendar.next_open(c1)
+        c2: Timestamp = self.calendar.next_close(c1)
+        if c1 < time < o1:
+            raise RuntimeError("撮合时间只能在交易时间段")
+        if time.second != 0:
+            raise RuntimeError("撮合时间只能在分钟的开始")
+
         # 如果是收盘时间，则以收盘价撮合。 否则则以当前分钟的bar进行撮合
-        if time not in self.trading_minutes:
-            raise RuntimeError("撮合时间错误")
         one_minute = Timedelta(minutes=1)
-        if time in self.closes:
-            df: DataFrame = self.ts_data_reader.get_ts_data([order.code], start=time, end=time)
+        if time in self.calendar.closes:
+            df: DataFrame = self.bar_loader.history_data_in_backtest([order.code], time, 1)
             close_price = df.iloc[0]['close']
             if order.order_type == OrderType.LIMIT and order.limit_price != close_price:
                 raise RuntimeError("在收盘时下的限价单的限价只能是收盘价")
             else:
                 # 以收盘价撮合
-                self.account.order_filled(order, order.quantity, close_price, time, time + one_minute)
+                self.account.order_filled(order, order.quantity, close_price, time, time)
         else:
             # 以当前的分钟bar进行撮合，不考虑成交量
-            df: DataFrame = self.ts_data_reader.get_ts_data([order.code], start=time + one_minute,
-                                                            end=time + one_minute)
+            df: DataFrame = self.bar_loader.history_data_in_backtest([order.code], end_time=time + one_minute,
+                                                                     count=1)
             bar: pd.Series = df.iloc[0]
             if order.order_type == OrderType.MKT:
                 # 以开盘价撮合
@@ -75,14 +82,69 @@ class IBAmericaMinBarMatchService(AbstractMatchService):
                     if bar['low'] <= order.limit_price:
                         self.account.order_filled(order, order.quantity, order.limit_price, time, time + one_minute)
 
+    def __init__(self, account: BacktestAccount, calendar: TradingCalendar, bar_loader: HistoryDataLoader):
+        self.account = account
+        self.calendar = calendar
+        self.bar_loader = bar_loader
+        self.opens = (self.calendar.opens - Timedelta(minutes=1)).values
+        self.closes = self.calendar.closes.values
 
-    def __init__(self, start: Timestamp, end: Timestamp, account: BacktestAccount):
-        calendar = get_calendar("NYSE")
-        trading_minutes = calendar.minutes_in_range(start, end)
-        opens = calendar.session_opens_in_range(start, end) - Timedelta(minutes=1)
-        trading_minutes = trading_minutes.union(pd.DatetimeIndex(opens.values, tz="UTC"))
-        price_data = TSDataLoader(data_provider_name="ibHistory", ts_type_name="ib1MinBar")
-        super().__init__(account, price_data, trading_minutes)
+
+class DailyBarMatchService(AbstractMatchService):
+    """
+    以日K数据进行撮合， 这种情况下，只能在每日开盘或者收盘的时候撮合，不能在交易时间段内撮合
+    """
+
+    def match(self, order: Order, time: Timestamp):
+        c1: Timestamp = self.calendar.previous_close(order.place_time)
+        o1: Timestamp = self.calendar.next_open(c1)
+        c2: Timestamp = self.calendar.next_close(c1)
+        if o1 < order.place_time < c2:
+            raise RuntimeError("不允许在交易时间段下单，除非在开盘或者收盘")
+        if time not in self.opens and time not in self.closes:
+            raise RuntimeError("只能在开盘或者收盘的时候撮合")
+
+        if time in self.closes:
+            df: DataFrame = self.bar_loader.history_data_in_backtest([order.code], time, count=1)
+            close_price = df.iloc[0]["close"]
+            if order.order_type == OrderType.LIMIT and order.limit_price != close_price:
+                raise RuntimeError("收盘只能以收盘价下单")
+            else:
+                self.account.order_filled(order, order.quantity, close_price, time, time)
+                return Event(EventType.ACCOUNT, sub_type=AccountEventType.FILLED, visible_time=time, data={})
+        if time in self.opens:
+            df: DataFrame = self.bar_loader.history_data_in_backtest([order.code], time + Timedelta(days=1), count=1)
+            open_price = df.iloc[0]['open']
+            if order.order_type == OrderType.MKT:
+                self.account.order_filled(order, order.quantity, open_price, time, time)
+                return Event(EventType.ACCOUNT, sub_type=AccountEventType.FILLED, visible_time=time, data={})
+            elif order.order_type == OrderType.LIMIT:
+                if order.direction == OrderDirection.BUY:
+                    if df.iloc[0]['high'] >= order.limit_price:
+                        self.account.order_filled(order, order.quantity, order.limit_price, time,
+                                                  self.calendar.next_close(time))
+                        return Event(EventType.ACCOUNT, sub_type=AccountEventType.FILLED,
+                                     visible_time=self.calendar.next_close(time), data={})
+                else:
+                    if df.iloc[0]['low'] <= order.limit_price:
+                        self.account.order_filled(order, order.quantity, order.limit_price, time,
+                                                  self.calendar.next_close(time))
+                        return Event(EventType.ACCOUNT, sub_type=AccountEventType.FILLED,
+                                     visible_time=self.calendar.next_close(time), data={})
+        return None
+
+    def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):
+        closes: DatetimeIndex = DatetimeIndex(self.calendar.closes.values)[visible_time_start, visible_time_end]
+        opens: DatetimeIndex = DatetimeIndex((self.calendar.opens - Timedelta(minutes=1)).values)[
+            visible_time_start, visible_time_end]
+        return opens.union(closes)
+
+    def __init__(self, account: BacktestAccount, calendar: TradingCalendar, bar_loader: HistoryDataLoader):
+        self.account = account
+        self.calendar = calendar
+        self.bar_loader = bar_loader
+        self.opens = (self.calendar.opens - Timedelta(minutes=1)).values
+        self.closes = self.calendar.closes.values
 
 
 class AbstractStrategy(metaclass=ABCMeta):
@@ -118,7 +180,8 @@ class StrategyEngine(object):
 
         for ep in strategy.event_producers:
             event_line.add_all(ep.get_events_on_history(start, end))
-        tep = TimeEventProducer(DateRules.every_day(), TimeRules.market_close(calendar=strategy.trading_calendar, offset=30),
+        tep = TimeEventProducer(DateRules.every_day(),
+                                TimeRules.market_close(calendar=strategy.trading_calendar, offset=30),
                                 sub_type="calc_net_value")
         event_line.add_all(tep.get_events_on_history(start, end))
         event_line.add_all(self.match_service.get_events_on_history(start, end))
