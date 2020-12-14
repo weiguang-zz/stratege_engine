@@ -1,9 +1,11 @@
 from unittest import TestCase
 
 from pandas import DataFrame
+from pandas._libs.tslibs.timedeltas import Timedelta
 
 from main.domain.account import AbstractAccount, Position, Order, OrderType, OrderDirection
-from main.domain.data_portal import TSDataReader, DataPortal
+from main.domain.data_portal import TSDataReader, DataPortal, HistoryDataLoader, CurrentPriceLoader, \
+    BarCurrentPriceLoader
 
 from main.domain.engine import AbstractStrategy, BacktestAccount, AbstractMatchService
 from main.domain.event_producer import Event, EventType, EventProducer, TimeEventProducer, DateRules, \
@@ -32,7 +34,7 @@ class SimpleTestStrategy(AbstractStrategy):
             positions: Dict[str, Position] = account.get_positions()
             if len(positions) <= 0:
                 # 买入苹果
-                recent_price = data_portal.current_price([code])
+                recent_price = data_portal.current_price([code])[code]
                 # df: DataFrame = data_portal.history("ibHistory", "ib1MinBar", [code], 1)
                 logging.info("当前时间:{current_time}, 获取到资产{code}的最新的价格数据为{recent_price}".
                              format(current_time=event.visible_time, code=code, recent_price=recent_price))
@@ -165,8 +167,16 @@ class Test(TestCase):
 
     def test_run_backtest(self):
         from main.service.strategy_service import run_backtest
+        from main.domain.engine import MinBarMatchService
         strategy = SimpleTestStrategy()
-        account: BacktestAccount = run_backtest(strategy, "2020-01-01", "2020-01-30", 100000)
+        min_bar_loader = HistoryDataLoader(data_provider_name="ibHistory",  ts_type_name="ib1MinBar")
+        match_service = MinBarMatchService(calendar=strategy.trading_calendar,
+                                           bar_loader=min_bar_loader)
+        current_price_loader = BarCurrentPriceLoader(bar_loader=min_bar_loader,calendar=strategy.trading_calendar,
+                                                     freq=Timedelta(minutes=1))
+        account: BacktestAccount = run_backtest(strategy, match_service=match_service,
+                                                current_price_loader=current_price_loader, start="2020-01-01",
+                                                end="2020-01-30", initial_cash=100000)
         # apple 2020-09-01 open 132.53
         # 2020-09-30 close 115.61
         print("done")

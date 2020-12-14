@@ -1,18 +1,19 @@
 from main.domain.account import AbstractAccount, BacktestAccount
 from pandas import Timestamp
 
-from main.domain.engine import AbstractStrategy, StrategyEngine, IBAmericaMinBarMatchService
+from main.domain.data_portal import CurrentPriceLoader
+from main.domain.engine import AbstractStrategy, StrategyEngine, AbstractMatchService
 
 
-def run_backtest(strategy: AbstractStrategy, start: str, end: str, initial_cash: float, tz='Asia/Shanghai'):
-    engine: StrategyEngine = StrategyEngine()
+def run_backtest(strategy: AbstractStrategy, match_service: AbstractMatchService,
+                 current_price_loader: CurrentPriceLoader,
+                 start: str, end: str, initial_cash: float, tz='Asia/Shanghai'):
+    engine: StrategyEngine = StrategyEngine(match_service)
     start = Timestamp(start, tz=tz)
     end = Timestamp(end, tz=tz)
     if start > end:
         raise RuntimeError("start 不能大于 end")
-    account = BacktestAccount(initial_cash=initial_cash)
-    match_service = IBAmericaMinBarMatchService(strategy.trading_calendar, start, end, account)
-    return engine.run_backtest(strategy, match_service)
+    return engine.run_backtest(strategy, current_price_loader, start, end, initial_cash)
 
 
 

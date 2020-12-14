@@ -2,11 +2,9 @@ from abc import *
 from enum import Enum
 from typing import Dict
 
-from pandas import Timedelta
 from pandas import Timestamp
 
-from main.domain.engine import StrategyEngine
-from main.domain.event_producer import Event, EventType, AccountEventType, EventProducer
+from main.domain.event_producer import EventProducer
 
 
 class OrderType(Enum):
@@ -36,7 +34,7 @@ class Position(object):
 class Order(object):
 
     def __init__(self, code: str, quantity: float, order_type: OrderType, direction: OrderDirection, time: Timestamp,
-                 limit_price: float):
+                 limit_price: float = None):
         self.code = code
         self.quantity = quantity
         self.order_type = order_type
@@ -47,6 +45,8 @@ class Order(object):
         self.filled = 0
         self.limit_price = limit_price
         self.status = OrderStatus.CREATED
+        if order_type == OrderType.LIMIT and not limit_price:
+            raise RuntimeError("limit price必须指定")
 
 
 class AbstractAccount(EventProducer, metaclass=ABCMeta):
@@ -86,7 +86,7 @@ class AbstractAccount(EventProducer, metaclass=ABCMeta):
 
 class BacktestAccount(AbstractAccount):
 
-    def start_listen(self, subscriber: StrategyEngine):
+    def start_listen(self, subscriber):
         raise RuntimeError("不支持订阅回测账户")
 
     def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):

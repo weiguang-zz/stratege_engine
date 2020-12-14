@@ -6,7 +6,7 @@ from pandas import Timestamp, Timedelta, DataFrame, DatetimeIndex
 from trading_calendars import TradingCalendar
 
 from main.domain.account import AbstractAccount, BacktestAccount, Order, OrderType, OrderDirection
-from main.domain.data_portal import DataPortal, HistoryDataLoader
+from main.domain.data_portal import DataPortal, HistoryDataLoader, CurrentPriceLoader
 from main.domain.event_producer import Event, EventProducer, TimeEventProducer, DateRules, TimeRules, \
     EventType, AccountEventType
 
@@ -31,6 +31,12 @@ class AbstractMatchService(EventProducer, metaclass=ABCMeta):
     def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):
         pass
 
+    def __init__(self):
+        self.account = None
+
+    def bind_account(self, account: BacktestAccount):
+        self.account = account
+
 
 class MinBarMatchService(AbstractMatchService):
     """
@@ -42,13 +48,20 @@ class MinBarMatchService(AbstractMatchService):
         trading_minutes = self.calendar.minutes_in_range(visible_time_start, visible_time_end)
         opens = self.calendar.session_opens_in_range(visible_time_start, visible_time_end) - Timedelta(minutes=1)
         trading_minutes = trading_minutes.union(pd.DatetimeIndex(opens.values, tz="UTC"))
-        return trading_minutes
+        trading_minutes = trading_minutes.tz_convert(visible_time_start.tz)
+        events: List[Event] = []
+        for dt in trading_minutes:
+            e = Event(event_type=EventType.TIME, sub_type="match_time", visible_time=dt, data={})
+            events.append(e)
+        return events
 
     def match(self, order: Order, time: Timestamp):
+        if not self.account:
+            raise RuntimeError("没有设置账户")
         if order.place_time.second != 0:
             raise RuntimeError("下单时间只能是分钟开始")
         c1: Timestamp = self.calendar.previous_close(time)
-        o1: Timestamp = self.calendar.next_open(c1)
+        o1: Timestamp = self.calendar.next_open(c1) - Timedelta(minutes=1)
         c2: Timestamp = self.calendar.next_close(c1)
         if c1 < time < o1:
             raise RuntimeError("撮合时间只能在交易时间段")
@@ -66,6 +79,7 @@ class MinBarMatchService(AbstractMatchService):
                     (order.order_type == OrderType.LIMIT and order.limit_price == close_price):
                 # 以收盘价撮合
                 self.account.order_filled(order, order.quantity, close_price, time, time)
+                return Event(EventType.ACCOUNT, AccountEventType.FILLED, visible_time=time, data={})
             else:
                 raise RuntimeError("不支持的订单类型")
         else:
@@ -75,20 +89,23 @@ class MinBarMatchService(AbstractMatchService):
             bar: pd.Series = df.iloc[0]
             if order.order_type == OrderType.MKT:
                 # 以开盘价撮合
-                self.account.order_filled(order, order.quantity, bar['open'], time, time + one_minute)
+                self.account.order_filled(order, order.quantity, bar['open'], time, time)
+                return Event(EventType.ACCOUNT, AccountEventType.FILLED, visible_time=time, data={})
             elif order.order_type == OrderType.LIMIT:
                 if order.direction == OrderDirection.BUY:
                     # 比较bar的最高价是否高于限价
                     if bar['high'] >= order.limit_price:
                         self.account.order_filled(order, order.quantity, order.limit_price, time, time + one_minute)
+                    return Event(EventType.ACCOUNT, AccountEventType.FILLED, visible_time=time + one_minute, data={})
                 else:
                     if bar['low'] <= order.limit_price:
                         self.account.order_filled(order, order.quantity, order.limit_price, time, time + one_minute)
+                    return Event(EventType.ACCOUNT, AccountEventType.FILLED, visible_time=time + one_minute, data={})
             else:
                 raise RuntimeError("不支持的订单类型")
 
-    def __init__(self, account: BacktestAccount, calendar: TradingCalendar, bar_loader: HistoryDataLoader):
-        self.account = account
+    def __init__(self, calendar: TradingCalendar, bar_loader: HistoryDataLoader):
+        super(MinBarMatchService, self).__init__()
         self.calendar = calendar
         self.bar_loader = bar_loader
         self.opens = (self.calendar.opens - Timedelta(minutes=1)).values
@@ -161,6 +178,7 @@ class AbstractStrategy(metaclass=ABCMeta):
         pass
 
     def __init__(self, event_producers: List[EventProducer], trading_calendar: TradingCalendar):
+        super(AbstractStrategy, self).__init__()
         if len(event_producers) <= 0:
             raise RuntimeError("event producers不能为空")
         self.event_producers = event_producers
@@ -168,39 +186,50 @@ class AbstractStrategy(metaclass=ABCMeta):
 
 
 class EventLine(object):
-    def add_all(self, events):
-        pass
+
+    def __init__(self):
+        self.events = []
+
+    def add_all(self, events: List[Event]):
+        self.events.extend(events)
+        self.events.sort()
 
     def pop_event(self) -> Event:
-        pass
+        if len(self.events) > 0:
+            return self.events.pop(0)
+        else:
+            return None
 
 
 class StrategyEngine(object):
 
     def __init__(self, match_service: AbstractMatchService):
         self.match_service = match_service
+        self.event_line: EventLine = EventLine()
 
-    def run_backtest(self, strategy: AbstractStrategy, start: Timestamp, end: Timestamp, initial_cash: float):
+    def run_backtest(self, strategy: AbstractStrategy, current_price_loader: CurrentPriceLoader,
+                     start: Timestamp, end: Timestamp, initial_cash: float):
         account = BacktestAccount(initial_cash)
-        data_portal: DataPortal = DataPortal()
-        event_line: EventLine = EventLine()
+        self.match_service.bind_account(account)
+        data_portal: DataPortal = DataPortal(backtest_current_price_loader=current_price_loader)
 
         for ep in strategy.event_producers:
-            event_line.add_all(ep.get_events_on_history(start, end))
+            self.event_line.add_all(ep.get_events_on_history(start, end))
         tep = TimeEventProducer(DateRules.every_day(),
                                 TimeRules.market_close(calendar=strategy.trading_calendar, offset=30),
                                 sub_type="calc_net_value")
-        event_line.add_all(tep.get_events_on_history(start, end))
-        event_line.add_all(self.match_service.get_events_on_history(start, end))
+        self.event_line.add_all(tep.get_events_on_history(start, end))
+        self.event_line.add_all(self.match_service.get_events_on_history(start, end))
 
-        event: Event = event_line.pop_event()
+        event: Event = self.event_line.pop_event()
         while event is not None:
             if self.is_system_event(event):
                 self.process_system_event(event, account, data_portal)
             else:
+                data_portal.set_current_dt(event.visible_time)
                 strategy.on_event(event, account, data_portal)
 
-            event = event_line.pop_event()
+            event = self.event_line.pop_event()
 
         return account
 
@@ -231,9 +260,15 @@ class StrategyEngine(object):
         if event.event_type == EventType.TIME and event.sub_type == 'match_time':
             orders = account.get_open_orders()
             if len(orders) > 0:
+                events: List[Event] = []
                 for order in orders:
-                    self.match_service.match(order, event.visible_time)
+                    event: Event = self.match_service.match(order, event.visible_time)
+                    if event:
+                        events.append(event)
+                self.event_line.add_all(events)
 
         elif event.event_type == EventType.TIME and event.sub_type == 'calc_net_value':
-            current_prices = data_portal.current_price("", "", list(account.positions.keys()))
+            current_prices = {}
+            if len(account.positions) > 0:
+                current_prices = data_portal.current_price(list(account.positions.keys()))
             account.calc_daily_net_value(event.visible_time, current_prices)

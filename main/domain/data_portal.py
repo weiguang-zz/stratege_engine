@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import *
 
 import requests
-from pandas import Timestamp, DataFrame
+from pandas import Timestamp, DataFrame, DatetimeIndex
 from abc import *
 
 from pandas import Timedelta
@@ -39,17 +39,18 @@ class CurrentPriceLoader(metaclass=ABCMeta):
 class BarCurrentPriceLoader(CurrentPriceLoader):
 
     def current_price(self, codes, end_time):
-        if end_time in (self.calendar.opens - Timedelta(minutes=1)):
+        if end_time in self.opens:
             # 获取下一个bar的开盘价
             df: DataFrame = self.bar_loader.history_data_in_backtest(codes, end_time + self.freq, count=1)
-            return df.iloc[0]['open']
+            return df.droplevel(0)['open'].to_dict()
         else:
             df: DataFrame = self.bar_loader.history_data_in_backtest(codes, end_time, count=1)
-            return df.iloc[0]['close']
+            return df.droplevel(0)['close'].to_dict()
 
     def __init__(self, bar_loader: HistoryDataLoader, calendar: TradingCalendar, freq: Timedelta):
         self.bar_loader = bar_loader
         self.calendar = calendar
+        self.opens = DatetimeIndex((calendar.opens - Timedelta(minutes=1)).values, tz='UTC')
         self.freq = freq
 
 
