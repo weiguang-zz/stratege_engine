@@ -12,6 +12,7 @@ from main.domain.event_producer import Event, EventType, AccountEventType, Event
 class OrderType(Enum):
     MKT = 0
     LIMIT = 1
+    STOP = 2
 
 
 class OrderDirection(Enum):

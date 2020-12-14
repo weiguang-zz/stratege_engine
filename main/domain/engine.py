@@ -62,9 +62,12 @@ class MinBarMatchService(AbstractMatchService):
             close_price = df.iloc[0]['close']
             if order.order_type == OrderType.LIMIT and order.limit_price != close_price:
                 raise RuntimeError("在收盘时下的限价单的限价只能是收盘价")
-            else:
+            elif order.order_type == OrderType.MKT or \
+                    (order.order_type == OrderType.LIMIT and order.limit_price == close_price):
                 # 以收盘价撮合
                 self.account.order_filled(order, order.quantity, close_price, time, time)
+            else:
+                raise RuntimeError("不支持的订单类型")
         else:
             # 以当前的分钟bar进行撮合，不考虑成交量
             df: DataFrame = self.bar_loader.history_data_in_backtest([order.code], end_time=time + one_minute,
@@ -81,6 +84,8 @@ class MinBarMatchService(AbstractMatchService):
                 else:
                     if bar['low'] <= order.limit_price:
                         self.account.order_filled(order, order.quantity, order.limit_price, time, time + one_minute)
+            else:
+                raise RuntimeError("不支持的订单类型")
 
     def __init__(self, account: BacktestAccount, calendar: TradingCalendar, bar_loader: HistoryDataLoader):
         self.account = account
@@ -131,6 +136,8 @@ class DailyBarMatchService(AbstractMatchService):
                                                   self.calendar.next_close(time))
                         return Event(EventType.ACCOUNT, sub_type=AccountEventType.FILLED,
                                      visible_time=self.calendar.next_close(time), data={})
+            else:
+                raise RuntimeError("不支持的订单类型")
         return None
 
     def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):

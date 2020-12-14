@@ -14,13 +14,6 @@ class EventType(Enum):
     ACCOUNT = 1
     DATA = 2
 
-
-class TimeEventType(Enum):
-    OPEN = 0
-    CLOSE = 1
-    BEFORE_TRADING_START = 3
-
-
 class AccountEventType(Enum):
     FILLED = 0
     CANCELED = 1
@@ -90,10 +83,10 @@ class EveryDay(Rule):
 
 
 class MarketOpen(Rule):
-    def __init__(self, calendar: TradingCalendar, offset):
+    def __init__(self, calendar: TradingCalendar, offset=0):
         self.offset = offset
         self.calendar = calendar
-        self.event_times = DatetimeIndex(self.calendar.opens.values, tz='UTC') + Timedelta(minutes=offset)
+        self.event_times = DatetimeIndex(self.calendar.opens.values, tz='UTC') + Timedelta(minutes=offset-1)
 
     def is_match(self, dt: Timestamp):
         if dt in self.event_times:
@@ -165,13 +158,17 @@ class TSDataEventProducer(EventProducer, StreamDataCallback):
         df: DataFrame = self.data_reader.history_data(self.codes, visible_time_start, visible_time_end)
         events = []
         for row in df.iterrows():
-            event = Event(event_type=EventType.DATA, sub_type=self.sub_type, visible_time=row['visible_time'], data=row)
+            data: Dict = row['data']
+            data['visible_time'] = row['visible_time']
+            data['code'] = row['code']
+            event = Event(event_type=EventType.DATA, sub_type=self.sub_type,
+                          visible_time=row['visible_time'], data=data)
             events.append(event)
         return events
 
     def __init__(self, provider_name: str, ts_type_name: str, codes: List[str]):
         data_reader: TSDataReader = TSDataReader(provider_name, ts_type_name)
-        self.sub_type = f"{provider_name}_{ts_type_name}"
+        self.sub_type = "{provider_name}:{ts_type_name}".format(provider_name=provider_name, ts_type_name=ts_type_name)
         self.data_reader = data_reader
         self.codes = codes
 
