@@ -14,3 +14,11 @@ if __name__ == '__main__':
     print_hi('PyCharm')
 
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
+
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
+plt.show(block=True)
+
+pd.Series([1,2,3,4]).plot.line()

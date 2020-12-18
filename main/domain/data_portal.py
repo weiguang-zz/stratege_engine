@@ -9,6 +9,16 @@ from pandas import Timedelta
 from trading_calendars import TradingCalendar
 
 
+class Bar(object):
+
+    def __init__(self, open_price: float, high_price: float, low_price: float, close_price: float, volume: float):
+        self.open_price = open_price
+        self.high_price = high_price
+        self.low_price = low_price
+        self.close_price = close_price
+        self.volume = volume
+
+
 class HistoryDataLoader(object):
     """
     该加载器是用来获取历史的时序数据的，由于每种时序数据获取历史数据的方法都一样，所以把供应商名和时序类型名作为该加载起的属性，用户需要

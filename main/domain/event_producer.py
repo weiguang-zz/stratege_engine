@@ -21,7 +21,7 @@ class AccountEventType(Enum):
 
 class Event(object):
 
-    def __init__(self, event_type: EventType, sub_type, visible_time: Timestamp, data: dict):
+    def __init__(self, event_type: EventType, sub_type, visible_time: Timestamp, data: object):
         if not visible_time.tz:
             raise RuntimeError("事件的可见时间必须有时区")
         # 统一使用中国标准时间
@@ -157,12 +157,12 @@ class TSDataEventProducer(EventProducer, StreamDataCallback):
     def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):
         df: DataFrame = self.data_reader.history_data(self.codes, visible_time_start, visible_time_end)
         events = []
-        for row in df.iterrows():
-            data: Dict = row['data']
-            data['visible_time'] = row['visible_time']
-            data['code'] = row['code']
+        for _, row in df.iterrows():
+            data: Dict = row.to_dict()
+            visible_time = row.name[0]
+            data['code'] = row.name[1]
             event = Event(event_type=EventType.DATA, sub_type=self.sub_type,
-                          visible_time=row['visible_time'], data=data)
+                          visible_time=visible_time, data=data)
             events.append(event)
         return events
 
