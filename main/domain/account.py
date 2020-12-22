@@ -212,7 +212,8 @@ class BacktestAccount(AbstractAccount):
         :return:
         """
         logging.info("订单成交:" + str(order_filled_data))
-        if order_filled_data.order.status == OrderStatus.FILLED or order_filled_data.order.status == OrderStatus.CANCELED:
+        if order_filled_data.order.status == OrderStatus.FILLED or \
+                order_filled_data.order.status == OrderStatus.CANCELED:
             raise RuntimeError("订单状态非法")
 
         order_filled_data.order.filled += order_filled_data.quantity

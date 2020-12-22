@@ -32,7 +32,17 @@ class Event(object):
         self.data = data
 
     def __lt__(self, other):
-        return self.visible_time < other.visible_time
+        if self.visible_time == other.visible_time:
+            # 账户事件放在最前面，因为账户事件是延后的，撮合时间事件放在最后面，因为撮合使用的是未来的数据
+            if self.event_type == EventType.ACCOUNT:
+                return True
+            if self.event_type == EventType.TIME and self.sub_type == 'match_time':
+                return False
+            if other.event_type == EventType.TIME and other.sub_type == 'match_time':
+                return True
+            return False
+        else:
+            return self.visible_time < other.visible_time
 
     def __str__(self):
         return '[Event]: event_type:{event_type}, sub_type:{sub_type}, visible_time:{visible_time}, data:{data}'. \

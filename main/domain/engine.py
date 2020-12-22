@@ -269,14 +269,15 @@ class StrategyEngine(object):
 
         event: Event = self.event_line.pop_event()
         while event is not None:
+            if event.event_type == EventType.ACCOUNT and event.sub_type == "order_filled":
+                # 修改账户持仓
+                if not isinstance(event.data, OrderFilledData):
+                    raise RuntimeError("事件数据类型错误")
+                account.order_filled(event.data)
+
             if self.is_system_event(event):
                 self.process_system_event(event, account, data_portal)
             else:
-                if event.event_type == EventType.ACCOUNT and event.sub_type == "order_filled":
-                    # 修改账户持仓
-                    if not isinstance(event.data, OrderFilledData):
-                        raise RuntimeError("事件数据类型错误")
-                    account.order_filled(event.data)
                 data_portal.set_current_dt(event.visible_time)
                 strategy.on_event(event, account, data_portal)
 

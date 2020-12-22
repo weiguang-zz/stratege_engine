@@ -6,7 +6,8 @@ from pandas import DataFrame
 from pandas._libs.tslibs.timedeltas import Timedelta
 from trading_calendars import get_calendar
 
-from main.domain.account import AbstractAccount, Position, Order, OrderType, OrderDirection, OrderFilledData
+from main.domain.account import AbstractAccount, Position, Order, OrderType, OrderDirection, OrderFilledData, \
+    OrderStatus
 from main.domain.data_portal import DataPortal, HistoryDataLoader, BarCurrentPriceLoader
 from main.domain.engine import AbstractStrategy, BacktestAccount
 from main.domain.event_producer import Event, EventType, EventProducer, TimeEventProducer, DateRules, \
@@ -104,46 +105,47 @@ class TestStrategy3(AbstractStrategy):
     """
 
     def on_event(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
-        if len(account.positions) <= 0:
+        if len(account.positions) <= 0 and len(account.get_open_orders()) <= 0:
             if event.event_type == EventType.TIME and event.sub_type == "before_trading_start":
-                df: DataFrame = data_portal.history("IB", "dailyBar", [self.code], 10)
-                self.avg_price = df['close'].avg()
+                df: DataFrame = data_portal.history("ibHistory", "ib1MinBar", [self.code], 10)
+                self.avg_price = df['close'].mean()
             if event.event_type == EventType.TIME and event.sub_type == "market_open":
-                current_price: Dict[str, float] = data_portal.current_price([self.code])
+                current_price = data_portal.current_price([self.code])[self.code]
                 if current_price < self.avg_price:
                     # 下单买入
-                    quantity = int(account.cash * 0.5 / current_price[self.code])
+                    quantity = int(account.cash * 0.5 / current_price)
                     order = Order(order_type=OrderType.MKT, direction=OrderDirection.BUY, time=event.visible_time,
-                                  quantity=quantity)
+                                  quantity=quantity, code=self.code)
                     account.place_order(order)
-                    self.base_price = current_price[self.code]
+                    self.base_price = current_price
 
         else:
-            if event.event_type == EventType.ACCOUNT and event.sub_type == "filled":
-                positions = account.positions
-                cp = data_portal.current_price([self.code])[self.code]
-                p = (cp - self.base_price) / self.base_price
-                p = int(p / 0.1)
-                if p >= 5:
-                    order = Order(self.code, quantity=positions[self.code], order_type=OrderType.MKT,
-                                  direction=OrderDirection.SELL,
-                                  time=event.visible_time)
-                    account.place_order(order)
+            if event.event_type == EventType.ACCOUNT and event.sub_type == "order_filled":
+                # 取消现有的订单
+                open_orders = account.get_open_orders()
+                for order in open_orders:
+                    order.status = OrderStatus.CANCELED
+                filled_data: OrderFilledData = event.data
+                # k 代表成交网格的标记，从上到下一次是5，4，3，2，1，0，-1，-2，-3，-4，-5
+                k = (filled_data.price - self.base_price) * 10 / self.base_price
+                position = account.positions[self.code]
+                up_price = self.base_price + (k + 1) * self.base_price / 10
+                up_percent = 0.5 - (k + 1) / 10
+                up_net_val = position.quantity * up_price + account.cash
+                up_sell_quantity = position.quantity - int((up_net_val * up_percent) / up_price)
+                down_price = self.base_price + (k - 1) * self.base_price / 10
+                down_percent = 0.5 - (k - 1) / 10
+                down_net_val = position.quantity * down_price + account.cash
+                down_buy_quantity = int((down_net_val * down_percent) / down_price) - position.quantity
 
-                #
+                sell_order = Order(self.code, up_sell_quantity, OrderType.LIMIT, OrderDirection.SELL,
+                                   time=event.visible_time, limit_price=up_price)
 
-                # 上一个网格的限价单
-                dest_percentage = 0.5 - 0.1 * (p + 1)
-                next_price = ((p + 1) * 0.1 + 1) * self.base_price
-                net_val = next_price * positions[self.code] + account.cash
-                sell_quantity = int(positions[self.code] - (net_val * dest_percentage / next_price))
-                if sell_quantity < 10:
-                    # 如果订单数很少，说明当前价格是从上个网格下来的， 则挂上上个网格的限价单。
-                    pass
+                buy_order = Order(self.code, down_buy_quantity, OrderType.LIMIT, OrderDirection.BUY,
+                                  time=event.visible_time, limit_price=down_price)
 
-                # 下一个网格限价单
-
-        pass
+                account.place_order(sell_order)
+                account.place_order(buy_order)
 
     def __init__(self):
         calendar = get_calendar("NYSE")
@@ -198,3 +200,16 @@ class Test(TestCase):
         pd.Series(account.daily_net_values).plot.line()
         plt.show()
         print("done")
+
+    def test_run_backtest3(self):
+        from main.service.strategy_service import run_backtest
+        from main.domain.engine import BarMatchService
+        strategy = TestStrategy3()
+        min_bar_loader = HistoryDataLoader(data_provider_name="ibHistory", ts_type_name="ib1MinBar")
+        match_service = BarMatchService(calendar=strategy.trading_calendar,
+                                        bar_loader=min_bar_loader, freq=Timedelta(minutes=1))
+        current_price_loader = BarCurrentPriceLoader(bar_loader=min_bar_loader, calendar=strategy.trading_calendar,
+                                                     freq=Timedelta(minutes=1))
+        account = run_backtest(strategy, match_service=match_service, current_price_loader=current_price_loader,
+                               start='2020-01-01', end='2020-01-30', initial_cash=100000)
+        print('done')
