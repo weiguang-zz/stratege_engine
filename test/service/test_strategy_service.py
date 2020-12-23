@@ -1,5 +1,5 @@
 import logging
-from typing import Dict
+from typing import *
 from unittest import TestCase
 
 from pandas import DataFrame
@@ -160,6 +160,78 @@ class TestStrategy3(AbstractStrategy):
         self.base_price = None
         super(TestStrategy3, self).__init__([tep, tep2], calendar)
 
+class TestStrategy4(AbstractStrategy):
+    """
+    没有选股和择时的网格交易
+    每个交易日的开盘建仓50%， 设置10个网格，每个网格的大小为建仓价格的一定百分比P
+    """
+
+    def on_event(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
+        if event.event_type == EventType.TIME and event.sub_type == 'market_open':
+            if len(account.positions) > 0:
+                raise RuntimeError("错误的账户状态")
+            cp = data_portal.current_price([self.code])[self.code]
+            quantity = int(account.cash * 0.5 / cp)
+            buy_order = Order(self.code, quantity, order_type=OrderType.MKT, direction=OrderDirection.BUY,
+                              time=event.visible_time)
+            account.place_order(buy_order)
+            self.base_price = cp
+
+        if event.event_type == EventType.TIME and event.sub_type == 'market_close':
+            account.cancel_all_open_orders()
+            for position in account.positions.values():
+                sell_order = Order(position.code, position.quantity, order_type=OrderType.MKT,
+                                   direction=OrderDirection.SELL, time=event.visible_time)
+                account.place_order(sell_order)
+
+        if event.event_type == EventType.ACCOUNT and event.sub_type == "order_filled":
+            if event.visible_time >= (self.trading_calendar.next_close(event.visible_time) - Timedelta(minutes=1)):
+                # 收盘前一分钟不下单
+                return
+
+            # 挂上下两个网格的交易订单
+            data: OrderFilledData = event.data
+            k = round((data.price - self.base_price) / self.base_price / self.p)
+            hold_quantity = 0 if self.code not in account.positions else account.positions[self.code].quantity
+            # 上一个格子的卖单
+            if (k+1) <= self.n:
+                up_percentage = 0.5 - (k+1) * (0.5 / self.n)
+                up_price = self.base_price + self.base_price * self.p * (k+1)
+                up_net_val = hold_quantity * up_price + account.cash
+                dest_quantity = int(up_net_val * up_percentage / up_price)
+                sell_order = Order(self.code, hold_quantity - dest_quantity, OrderType.LIMIT,
+                                   direction=OrderDirection.SELL, time=event.visible_time, limit_price=up_price)
+                account.place_order(sell_order)
+            # 下一个格子的买单
+            if (k-1) >= -self.n:
+                down_percentage = 0.5 - (k-1) * (0.5 / self.n)
+                down_price = self.base_price + self.base_price * self.p * (k-1)
+                down_net_val = hold_quantity * down_price + account.cash
+                dest_quantity = int(down_net_val * down_percentage / down_price)
+                buy_order = Order(self.code, dest_quantity-hold_quantity, OrderType.LIMIT,
+                                  direction=OrderDirection.BUY, time=event.visible_time, limit_price=down_price)
+                account.place_order(buy_order)
+
+    def __init__(self, code, n=5, p=0.02):
+        """
+
+        :param code: 资产代号
+        :param n: 单边网格数量
+        :param p: 每个网格大小
+        """
+        calendar = get_calendar("NYSE")
+        # 嘉年华
+        # self.code = "CCL_STK_USD_SMART"
+        self.code = code
+        self.n = n
+        self.p = p
+        tep = TimeEventProducer(DateRules.every_day(), TimeRules.market_open(calendar=calendar), sub_type="market_open")
+        tep2 = TimeEventProducer(DateRules.every_day(), TimeRules.market_close(calendar=calendar, offset=-1),
+                                 sub_type="market_close")
+        eps: List[EventProducer] = [tep, tep2]
+
+        super(TestStrategy4, self).__init__(eps, calendar)
+
 
 class Test(TestCase):
 
@@ -213,3 +285,20 @@ class Test(TestCase):
         account = run_backtest(strategy, match_service=match_service, current_price_loader=current_price_loader,
                                start='2020-01-01', end='2020-01-30', initial_cash=100000)
         print('done')
+
+    def test_run_backtest4(self):
+        from main.service.strategy_service import run_backtest
+        from main.domain.engine import BarMatchService
+        strategy = TestStrategy4(code="CCL_STK_USD_SMART", n=5, p=0.01)
+        min_bar_loader = HistoryDataLoader(data_provider_name="ibHistory", ts_type_name="ib1MinBar")
+        match_service = BarMatchService(calendar=strategy.trading_calendar,
+                                        bar_loader=min_bar_loader, freq=Timedelta(minutes=1))
+        current_price_loader = BarCurrentPriceLoader(bar_loader=min_bar_loader, calendar=strategy.trading_calendar,
+                                                     freq=Timedelta(minutes=1))
+        account = run_backtest(strategy, match_service=match_service, current_price_loader=current_price_loader,
+                               start='2020-01-01', end='2020-01-30', initial_cash=100000)
+        import pandas as pd
+        import matplotlib.pyplot as plt
+        pd.Series(account.daily_net_values).plot.line()
+        plt.show()
+        print("done")

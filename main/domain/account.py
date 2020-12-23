@@ -191,6 +191,10 @@ class AbstractAccount(EventProducer, metaclass=ABCMeta):
 
         self.daily_net_values[time] = daily_net_value
 
+    def cancel_all_open_orders(self):
+        for order in self.get_open_orders():
+            order.status = OrderStatus.CANCELED
+
 
 class BacktestAccount(AbstractAccount):
 
