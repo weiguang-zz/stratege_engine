@@ -14,9 +14,3 @@ def run_backtest(strategy: AbstractStrategy, match_service,
     if start > end:
         raise RuntimeError("start 不能大于 end")
     return engine.run_backtest(strategy, current_price_loader, start, end, initial_cash)
-
-
-
-
-def run(strategy: AbstractStrategy, account: AbstractAccount):
-    pass

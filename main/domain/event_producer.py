@@ -5,6 +5,9 @@ from typing import *
 from pandas import Timestamp, DatetimeIndex, DataFrame
 from pandas import Timedelta
 from trading_calendars import TradingCalendar
+from threading import Thread
+import logging
+import time
 
 from main.domain.data_portal import TSDataReader, StreamDataCallback, TSData
 
@@ -13,6 +16,7 @@ class EventType(Enum):
     TIME = 0
     ACCOUNT = 1
     DATA = 2
+
 
 class AccountEventType(Enum):
     FILLED = 0
@@ -96,7 +100,7 @@ class MarketOpen(Rule):
     def __init__(self, calendar: TradingCalendar, offset=0):
         self.offset = offset
         self.calendar = calendar
-        self.event_times = DatetimeIndex(self.calendar.opens.values, tz='UTC') + Timedelta(minutes=offset-1)
+        self.event_times = DatetimeIndex(self.calendar.opens.values, tz='UTC') + Timedelta(minutes=offset - 1)
 
     def is_match(self, dt: Timestamp):
         if dt in self.event_times:
@@ -132,6 +136,37 @@ class TimeRules(object):
         return MarketClose(calendar, offset)
 
 
+class TimeEventCondition(object):
+    def __init__(self, date_rule: Rule, time_rule: Rule, name: str):
+        self.name = name
+        self.date_rule = date_rule
+        self.time_rule = time_rule
+
+    def is_match(self, time: Timestamp):
+        return self.date_rule.is_match(time) and self.time_rule.is_match(time)
+
+
+class TimeEventThread(Thread):
+    def __init__(self, subscriber: EventSubscriber, time_event_conditions: List[TimeEventCondition]):
+        super().__init__()
+        self.name = "time_event_thread"
+        self.subscriber = subscriber
+        self.time_event_conditions = time_event_conditions
+
+    def run(self) -> None:
+        try:
+            while True:
+                t = Timestamp.now(tz='Asia/Shanghai')
+                logging.info("当前时间:{}".format(t))
+                for cond in self.time_event_conditions:
+                    if cond.is_match(t):
+                        event = Event(EventType.TIME, cond.name, t, {})
+                        self.subscriber.on_event(event)
+                time.sleep(1)
+        except RuntimeError as e:
+            logging.error('error', e)
+
+
 class TimeEventProducer(EventProducer):
 
     def get_events_on_history(self, visible_time_start: Timestamp, visible_time_end: Timestamp):
@@ -139,18 +174,18 @@ class TimeEventProducer(EventProducer):
         delta = Timedelta(minutes=1)
         p = visible_time_start
         while p <= visible_time_end:
-            if self.date_rule.is_match(p) and self.time_rule.is_match(p):
-                events.append(Event(EventType.TIME, self.sub_type, p, {}))
+            for cond in self.time_event_conditions:
+                if cond.is_match(p):
+                    events.append(Event(EventType.TIME, cond.name, p, {}))
             p += delta
         return events
 
-    def __init__(self, date_rule: Rule, time_rule: Rule, sub_type: str):
-        self.date_rule = date_rule
-        self.time_rule = time_rule
-        self.sub_type = sub_type
+    def __init__(self, time_event_conditions: List[TimeEventCondition]):
+        self.time_event_conditions = time_event_conditions
 
-    def start_listen(self, subscribe):
-        pass
+    def start_listen(self, subscriber: EventSubscriber):
+        # 启动线程来产生时间事件
+        TimeEventThread(subscriber, self.time_event_conditions).start()
 
 
 class TSDataEventProducer(EventProducer, StreamDataCallback):

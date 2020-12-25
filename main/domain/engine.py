@@ -248,7 +248,7 @@ class EventLine(object):
             return None
 
 
-class StrategyEngine(object):
+class StrategyEngine(EventSubscriber):
 
     def __init__(self, match_service: BarMatchService):
         self.match_service = match_service
@@ -285,14 +285,14 @@ class StrategyEngine(object):
 
         return account
 
-    def run(self, strategy: AbstractStrategy, account: AbstractAccount):
+    def run(self, strategy: AbstractStrategy, account: AbstractAccount, current_price_loader: CurrentPriceLoader):
         for ep in strategy.event_producers:
             ep.start_listen(self)
 
         account.start_listen(self)
         self.strategy = strategy
         self.account = account
-        self.data_portal = DataPortal(True)
+        self.data_portal = DataPortal(True, realtime_current_price_loader=current_price_loader)
 
     def on_event(self, event: Event):
         if self.is_system_event(event):

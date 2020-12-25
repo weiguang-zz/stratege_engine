@@ -40,34 +40,74 @@ class HistoryDataLoader(object):
         return self.ts_data_reader.recent_history_data(codes, count)
 
 
+class Price(object):
+
+    def __init__(self, code, price, time: Timestamp):
+        self.code = code
+        self.price = price
+        self.time = time
+
+    def __str__(self):
+        return "[price](code:{}, price:{}, time:{})".format(self.code, self.price, self.time)
+
 class CurrentPriceLoader(metaclass=ABCMeta):
     @abstractmethod
-    def current_price(self, codes, end_time):
+    def current_price(self, codes, end_time) -> Dict[str, Price]:
         pass
 
 
 class BarCurrentPriceLoader(CurrentPriceLoader):
 
     def current_price(self, codes, end_time):
-        if end_time in self.opens:
-            # 获取下一个bar的开盘价
-            df: DataFrame = self.bar_loader.history_data_in_backtest(codes, end_time + self.freq, count=1)
-            return df.droplevel(0)['open'].to_dict()
+        if not self.is_realtime:
+            if end_time in self.opens:
+                # 获取下一个bar的开盘价
+                df: DataFrame = self.bar_loader.history_data_in_backtest(codes, end_time + self.freq, count=1)
+                if len(df) != len(codes):
+                    raise RuntimeError("数据错误")
+                ret = {}
+                for idx, ser in df.iterrows():
+                    ret[idx[1]] = Price(idx[1], ser['open'], Timestamp(ser['date']))
+                return ret
+            else:
+                df: DataFrame = self.bar_loader.history_data_in_backtest(codes, end_time, count=1)
+                if len(df) != len(codes):
+                    raise RuntimeError("数据错误")
+                ret = {}
+                for idx, ser in df.iterrows():
+                    ret[idx[1]] = Price(idx[1], ser['close'], self.calendar.next_close(Timestamp(ser['date'])))
+                return ret
         else:
-            df: DataFrame = self.bar_loader.history_data_in_backtest(codes, end_time, count=1)
-            return df.droplevel(0)['close'].to_dict()
+            raise NotImplementedError
 
-    def __init__(self, bar_loader: HistoryDataLoader, calendar: TradingCalendar, freq: Timedelta):
+    def __init__(self, bar_loader: HistoryDataLoader, calendar: TradingCalendar, freq: Timedelta,
+                 is_realtime: bool = False):
         self.bar_loader = bar_loader
         self.calendar = calendar
         self.opens = DatetimeIndex((calendar.opens - Timedelta(minutes=1)).values, tz='UTC')
         self.freq = freq
+        self.is_realtime = is_realtime
 
 
-class IBRealtimeCurrentPriceLoader(CurrentPriceLoader):
+class TickCurrentPriceLoader(CurrentPriceLoader):
 
     def current_price(self, codes, end_time):
-        raise NotImplemented("")
+        if self.is_realtime:
+            df: DataFrame = self.tick_loader.history_data(codes, count=1)
+            df.sort_index(level=0, ascending=True, inplace=True)
+            df = df.groupby(level=1).tail(n=1)
+            ret = {}
+            for idx, row in df.iterrows():
+                code = idx[1]
+                ret[code] = Price(code, row['price'], Timestamp(row['time']))
+            return ret
+        else:
+            raise NotImplementedError
+
+    def __init__(self, tick_loader: HistoryDataLoader, calendar: TradingCalendar, is_realtime: bool = False):
+        self.tick_loader = tick_loader
+        self.calendar = calendar
+        self.is_realtime = is_realtime
 
 
 class TSData(object):
@@ -127,7 +167,20 @@ class TSDataReader(object):
                 "count": count
             }
         url = "http://localhost:32900/queryData"
-        resp = requests.get(url, params)
+        return self._get_ts_data(url, params)
+
+    def recent_history_data(self, codes, count=100):
+        params = {
+            "providerName": self.data_provider_name,
+            "tsTypeName": self.ts_type_name,
+            "codes": ",".join(codes),
+            "count": count
+        }
+        url = "http://localhost:32900/historyData"
+        return self._get_ts_data(url, params)
+
+    def _get_ts_data(self, url, param) -> DataFrame:
+        resp = requests.get(url, param)
         if resp.status_code == 200:
             result = resp.json()
             if not result['success']:
@@ -141,9 +194,6 @@ class TSDataReader(object):
                 df = DataFrame(df_data)
                 df.set_index(['visible_time', 'code'], inplace=True)
                 return df
-
-    def recent_history_data(self, codes, count=100):
-        pass
 
     def listen(self, subscriber: StreamDataCallback):
         """
@@ -181,7 +231,7 @@ class DataPortal(object):
                 raise RuntimeError("当前时间没有设置")
             return ts_data_loader.history_data_in_backtest(codes, end_time=self.current_dt, count=window)
 
-    def current_price(self, codes: List[str]):
+    def current_price(self, codes: List[str]) -> Dict[str, Price]:
         if self.is_real_time:
             return self.realtime_current_price_loader.current_price(codes, Timestamp.now())
         else:
