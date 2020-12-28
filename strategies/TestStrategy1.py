@@ -130,10 +130,10 @@ if __name__ == "__main__":
     account = IBAccount("192.168.0.221", 4002, 5, 30000)
     engine = StrategyEngine(None)
     engine.run(strategy, account, current_price_loader)
-    # import time
-    # time.sleep(5)
-    # engine.on_event(Event(EventType.TIME, sub_type="market_open", visible_time=Timestamp.now(tz='Asia/Shanghai'),
-    #                       data={}))
+    import time
+    time.sleep(5)
+    engine.on_event(Event(EventType.TIME, sub_type="market_open", visible_time=Timestamp.now(tz='Asia/Shanghai'),
+                          data={}))
     # time.sleep(10)
     # engine.on_event(Event(EventType.TIME, sub_type="market_close", visible_time=Timestamp.now(tz='Asia/Shanghai'),
     #                       data={}))
