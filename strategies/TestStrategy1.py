@@ -4,7 +4,7 @@ import time
 from typing import *
 
 from pandas._libs.tslibs.timedeltas import Timedelta
-from pip._vendor.msgpack import Timestamp
+from pandas._libs.tslibs.timestamps import Timestamp
 from trading_calendars import get_calendar
 
 from main.domain.account import AbstractAccount, Order, OrderType, OrderDirection, OrderFilledData, IBAccount
