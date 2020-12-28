@@ -156,13 +156,14 @@ class TimeEventThread(Thread):
     def run(self) -> None:
         try:
             while True:
-                t = Timestamp.now(tz='Asia/Shanghai')
+                t: Timestamp = Timestamp.now(tz='Asia/Shanghai')
+                t = t.round(freq=Timedelta(seconds=1))
                 logging.info("当前时间:{}".format(t))
                 for cond in self.time_event_conditions:
                     if cond.is_match(t):
                         event = Event(EventType.TIME, cond.name, t, {})
                         self.subscriber.on_event(event)
-                time.sleep(1)
+                time.sleep(0.8)
         except RuntimeError as e:
             logging.error('error', e)
 
