@@ -9,7 +9,7 @@ from threading import Thread
 import logging
 import time
 
-from main.domain.data_portal import TSDataReader, StreamDataCallback, TSData
+from se.domain.data_portal import TSDataReader, StreamDataCallback, TSData
 
 
 class EventType(Enum):

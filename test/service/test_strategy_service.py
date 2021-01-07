@@ -6,11 +6,11 @@ from pandas import DataFrame
 from pandas._libs.tslibs.timedeltas import Timedelta
 from trading_calendars import get_calendar
 
-from main.domain.account import AbstractAccount, Position, Order, OrderType, OrderDirection, OrderFilledData, \
+from se.domain.account import AbstractAccount, Position, Order, OrderType, OrderDirection, OrderFilledData, \
     OrderStatus
-from main.domain.data_portal import DataPortal, HistoryDataLoader, BarCurrentPriceLoader
-from main.domain.engine import AbstractStrategy, BacktestAccount
-from main.domain.event_producer import Event, EventType, EventProducer, TimeEventProducer, DateRules, \
+from se.domain.data_portal import DataPortal, HistoryDataLoader, BarCurrentPriceLoader
+from se.domain.engine import AbstractStrategy, BacktestAccount
+from se.domain.event_producer import Event, EventType, EventProducer, TimeEventProducer, DateRules, \
     TimeRules, TSDataEventProducer
 
 logging.basicConfig(
@@ -236,8 +236,8 @@ class TestStrategy4(AbstractStrategy):
 class Test(TestCase):
 
     def test_run_backtest(self):
-        from main.service.strategy_service import run_backtest
-        from main.domain.engine import BarMatchService
+        from se.service.strategy_service import run_backtest
+        from se.domain.engine import BarMatchService
         strategy = SimpleTestStrategy()
         min_bar_loader = HistoryDataLoader(data_provider_name="ibHistory", ts_type_name="ib1MinBar")
         match_service = BarMatchService(calendar=strategy.trading_calendar,
@@ -256,8 +256,8 @@ class Test(TestCase):
         self.assertEquals(len(account.orders), 1)
 
     def test_run_backtest2(self):
-        from main.service.strategy_service import run_backtest
-        from main.domain.engine import BarMatchService
+        from se.service.strategy_service import run_backtest
+        from se.domain.engine import BarMatchService
         strategy = TestStrategy2()
         min_bar_loader = HistoryDataLoader(data_provider_name="ibHistory", ts_type_name="ib1MinBar")
         match_service = BarMatchService(calendar=strategy.trading_calendar,
@@ -274,8 +274,8 @@ class Test(TestCase):
         print("done")
 
     def test_run_backtest3(self):
-        from main.service.strategy_service import run_backtest
-        from main.domain.engine import BarMatchService
+        from se.service.strategy_service import run_backtest
+        from se.domain.engine import BarMatchService
         strategy = TestStrategy3()
         min_bar_loader = HistoryDataLoader(data_provider_name="ibHistory", ts_type_name="ib1MinBar")
         match_service = BarMatchService(calendar=strategy.trading_calendar,
@@ -287,8 +287,8 @@ class Test(TestCase):
         print('done')
 
     def test_run_backtest4(self):
-        from main.service.strategy_service import run_backtest
-        from main.domain.engine import BarMatchService
+        from se.service.strategy_service import run_backtest
+        from se.domain.engine import BarMatchService
         strategy = TestStrategy4(code="CCL_STK_USD_SMART", n=5, p=0.01)
         min_bar_loader = HistoryDataLoader(data_provider_name="ibHistory", ts_type_name="ib1MinBar")
         match_service = BarMatchService(calendar=strategy.trading_calendar,

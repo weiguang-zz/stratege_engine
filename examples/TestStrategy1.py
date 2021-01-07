@@ -1,16 +1,15 @@
 import logging
 import os
-import time
 from typing import *
 
 from pandas._libs.tslibs.timedeltas import Timedelta
 from pandas._libs.tslibs.timestamps import Timestamp
 from trading_calendars import get_calendar
 
-from main.domain.account import AbstractAccount, Order, OrderType, OrderDirection, OrderFilledData, IBAccount
-from main.domain.data_portal import DataPortal, HistoryDataLoader, TickCurrentPriceLoader, TSDataReader
-from main.domain.engine import AbstractStrategy, StrategyEngine
-from main.domain.event_producer import Event, EventType, EventProducer, TimeEventProducer, DateRules, TimeRules, \
+from se.domain.account import AbstractAccount, Order, OrderType, OrderDirection, OrderFilledData, IBAccount
+from se.domain.data_portal import DataPortal, HistoryDataLoader, TickCurrentPriceLoader
+from se.domain.engine import AbstractStrategy, StrategyEngine
+from se.domain.event_producer import Event, EventType, EventProducer, TimeEventProducer, DateRules, TimeRules, \
     TimeEventCondition
 
 
@@ -128,7 +127,7 @@ if __name__ == "__main__":
     current_price_loader = TickCurrentPriceLoader(tick_loader=HistoryDataLoader(data_provider_name="ib",
                                                                                 ts_type_name='tick'),
                                                   calendar=strategy.trading_calendar, is_realtime=True)
-    account = IBAccount("192.168.0.221", 4002, 5, 30000)
+    account = IBAccount("192.168.0.221", 4002, 8, 30000)
     engine = StrategyEngine(None)
     engine.run(strategy, account, current_price_loader)
     import time

@@ -1,0 +1,8 @@
+trading-calendars>=2.0.0
+matplotlib==3.3.3
+pandas>=1.1.4
+ibapi>=9.76.1
+requests>=2.25.0
+pinject
+jupyter
+cassandra-driver

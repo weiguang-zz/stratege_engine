@@ -10,8 +10,8 @@ from ibapi.order_state import OrderState
 from pandas import Timedelta
 from pandas import Timestamp
 
-from main.domain.data_portal import Bar
-from main.domain.event_producer import EventProducer, Event, EventType, EventSubscriber
+from se.domain.data_portal import Bar
+from se.domain.event_producer import EventProducer, Event, EventType, EventSubscriber
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.order import Order as IBOrder
@@ -295,8 +295,13 @@ class IBAccount(AbstractAccount, EWrapper):
         now = Timestamp.now(tz='Asia/Shanghai')
         if status == 'Filled':
             # 订单成交
+            if order.status == OrderStatus.FILLED:
+                #  表示已经发送过成交事件
+                logging.info("重复的订单成交消息，不做处理")
+                return
             data: OrderFilledData = OrderFilledData(order, avgFillPrice, filled, start_filled_time=now,
                                                     end_filled_time=now)
+            self.order_filled(data)
             event = Event(event_type=EventType.ACCOUNT, sub_type="order_filled",
                           visible_time=Timestamp.now(tz="Asia/Shanghai"), data=data)
             self.subscriber.on_event(event)
@@ -455,3 +460,10 @@ class IBAccount(AbstractAccount, EWrapper):
         Request.id_to_request.pop(req.req_id)
         self.contract_code_to_detail[code] = resp
         return resp
+
+    def order_filled(self, data: OrderFilledData):
+        order = data.order
+        if order.status == OrderStatus.FILLED or order.status == OrderStatus.CANCELED:
+            raise RuntimeError("非法的订单状态")
+        order.filled = data.quantity
+        order.status = OrderStatus.FILLED

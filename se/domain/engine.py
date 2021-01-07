@@ -5,9 +5,9 @@ import pandas as pd
 from pandas import Timestamp, Timedelta
 from trading_calendars import TradingCalendar
 
-from main.domain.account import AbstractAccount, BacktestAccount, Order, OrderFilledData
-from main.domain.data_portal import DataPortal, HistoryDataLoader, CurrentPriceLoader, Bar
-from main.domain.event_producer import Event, EventProducer, TimeEventProducer, DateRules, TimeRules, \
+from se.domain.account import AbstractAccount, BacktestAccount, Order, OrderFilledData
+from se.domain.data_portal import DataPortal, HistoryDataLoader, CurrentPriceLoader, Bar
+from se.domain.event_producer import Event, EventProducer, TimeEventProducer, DateRules, TimeRules, \
     EventType, EventSubscriber
 
 
@@ -322,6 +322,6 @@ class StrategyEngine(EventSubscriber):
 
         elif event.event_type == EventType.TIME and event.sub_type == 'calc_net_value':
             current_prices = {}
-            if len(account.positions) > 0:
-                current_prices = data_portal.current_price(list(account.positions.keys()))
+            if len(account.get_positions()) > 0:
+                current_prices = data_portal.current_price(list(account.get_positions().keys()))
             account.calc_daily_net_value(event.visible_time, current_prices)
