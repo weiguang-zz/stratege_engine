@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from pandas._libs.tslibs.timestamps import Timestamp
 
-from se.domain2.time_series.time_series import TimeSeries, HistoryDataQueryCommand
+from se.domain2.time_series.time_series import TimeSeries, HistoryDataQueryCommand, TimeSeriesRepo
 
 
 class Domain(object):
@@ -22,20 +22,15 @@ class Column(metaclass=ABCMeta):
     def get_data(self, domain: Domain):
         pass
 
-    def __init__(self, name: str):
-        self.name = name
-
 
 class LoadableColumn(Column):
 
     def get_data(self, domain: Domain):
-        from se import ts_repo
-        ts: TimeSeries = ts_repo.find_one(self.ts_type_name)
-        df = ts.history_data(HistoryDataQueryCommand(domain.start, domain.end, domain.codes, -1))
-        return df.unstack()
+        ts: TimeSeries = TimeSeriesRepo.find_one(self.ts_type_name)
+        df = ts.history_data(HistoryDataQueryCommand(domain.start, domain.end, domain.codes))
+        return df[self.ts_type_column_name].unstack()[domain.codes]
 
     def __init__(self, ts_type_name: str, ts_type_column_name: str):
-        super().__init__(ts_type_column_name)
         self.ts_type_name = ts_type_name
         self.ts_type_column_name = ts_type_column_name
 
@@ -46,8 +41,7 @@ class ComputableColumn(Column, metaclass=ABCMeta):
     def calc(self, *args):
         pass
 
-    def __init__(self, name: str, in_params: List[Column]):
-        super().__init__(name)
+    def __init__(self, in_params: List[Column]):
         self.in_params = in_params
 
 
@@ -61,17 +55,17 @@ class MovingAverageComputableColumn(ComputableColumn):
         return self.calc(*args)
 
     def calc(self, df):
-        return df.rolling(self.window).mean().values
+        return df.rolling(self.window).mean()
 
-    def __init__(self, name: str, in_params: List[Column], window: int):
-        super().__init__(name, in_params)
+    def __init__(self, in_params: List[Column], window: int):
+        super().__init__(in_params)
         if len(in_params) != 1:
             raise RuntimeError("非法的入参")
         self.window = window
 
 
 class Pipeline(object):
-    def __init__(self, domain: Domain, columns: List[Column], screen: Column = None):
+    def __init__(self, domain: Domain, columns: Mapping[str, Column], screen: Column = None):
         self.domain = domain
         self.columns = columns
         self.screen = screen
@@ -79,9 +73,11 @@ class Pipeline(object):
 
 def run_pipeline(pipeline: Pipeline):
     column_values = []
-    for column in pipeline.columns:
-        values: DataFrame = column.get_data(pipeline.domain)
-        column_values.append(values.stack())
+    column_names = []
+    for column_name in pipeline.columns.keys():
+        values: DataFrame = pipeline.columns[column_name].get_data(pipeline.domain)
+        column_values.append(values.stack(dropna=False))
+        column_names.append(column_name)
     df = pd.concat(column_values, axis=1)
-    df.columns = pipeline.domain.codes
+    df.columns = column_names
     return df

@@ -113,7 +113,8 @@ class TimeSeriesDataRepo(object):
 
         for row in r.all():
             values: Mapping[str, object] = func.deserialized(row.data)
-            ts_data = TSData(row.type, row.visible_time, row.code, values)
+            visible_time = Timestamp(row.visible_time, tz='UTC').tz_convert("Asia/Shanghai")
+            ts_data = TSData(row.type, visible_time, row.code, values)
             data_list.append(ts_data)
         return data_list
 
@@ -231,7 +232,7 @@ class TimeSeries(object):
         if not from_local:
             ts_data_list = self.func.load_history_data(command)
         else:
-            ts_data_list = TimeSeriesDataRepo.query(command)
+            ts_data_list = TimeSeriesDataRepo.query(self.name, command)
 
         # change to DataFrame, MultiIndex (visible_time, code)
         df_data = []

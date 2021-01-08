@@ -7,7 +7,7 @@ from ibapi.common import BarData, HistoricalTickLast, ListOfHistoricalTickLast
 from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
 from pandas import Timestamp, DataFrame
-from pandas._libs.tslibs.timedeltas import Timedelta
+from pandas import Timedelta
 
 from se import config
 
