@@ -47,5 +47,3 @@ import json
 import pandas as pd
 a = {'a':1, 'b': 'sss'}
 s = json.dumps(a)
-
-json.loads(s)

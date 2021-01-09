@@ -8,6 +8,9 @@ from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
 from pandas import Timestamp, DataFrame
 from pandas import Timedelta
+import threading
+import logging
+import time
 
 from se import config
 
@@ -73,8 +76,23 @@ class IBClient(EWrapper):
         self.cli = cli
         self._next_valid_id = None
         cli.connect(host, port, client_id)
-        import threading
-        threading.Thread(name="ib_msg_consumer", target=cli.run).start()
+        if cli.connState == EClient.CONNECTED:
+            threading.Thread(name="ib_msg_consumer", target=cli.run).start()
+        else:
+            # 没有连接成功，将会启动轮询现场
+            logging.info("没有到ib server，将会重试")
+
+            def connect_retry():
+                while True:
+                    logging.info("尝试重新连接")
+                    cli.connect(host, port, client_id)
+                    if cli.connState == EClient.CONNECTED:
+                        logging.info("连接成功")
+                        threading.Thread(name="ib_msg_consumer", target=cli.run).start()
+                        break
+                    time.sleep(10)
+
+            threading.Thread(name="ib_connect_retry", target=connect_retry).start()
 
     def _req_history_data(self, code: str, end_date_time: Timestamp, duration_str, bar_size, what_to_show,
                           use_rth: int, format_date: int, keep_up_to_date, char_options) -> List[BarData]:
@@ -164,6 +182,7 @@ client = IBClient(config.get("ib", "host"), config.getint("ib", 'port'), config.
 
 
 class IBMinBar(TimeSeriesFunction):
+
     def name(self) -> str:
         return "ibMinBar"
 
@@ -183,6 +202,9 @@ class IBMinBar(TimeSeriesFunction):
 
         return all_ts_datas
 
+    def current_price(self, codes) -> Mapping[str, float]:
+        raise RuntimeError("not supported")
+
     def load_assets(self) -> List[Asset]:
         pass
 
@@ -197,4 +219,3 @@ class IBMinBar(TimeSeriesFunction):
                    Column("high", float, None, None, None), Column("low", float, None, None, None),
                    Column("close", float, None, None, None), Column("volume", int, None, None, None)]
         return columns
-

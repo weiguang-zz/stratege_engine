@@ -51,6 +51,24 @@ class Column(object):
         raise RuntimeError("无法反序列化")
 
 
+class DataRecord(object):
+    def __init__(self, code: str, start: Timestamp, end: Timestamp):
+        self.code = code
+        self.start = start.tz_convert("Asia/Shanghai")
+        self.end = end.tz_convert("Asia/Shanghai")
+
+    def update(self, command):
+        if not isinstance(command, SingleCodeQueryCommand):
+            raise RuntimeError("wrong type")
+        if command.code != self.code:
+            raise RuntimeError("wrong code")
+        if command.start < self.start:
+            self.start = command.start
+        if command.end > self.end:
+            self.end = command.end
+
+
+
 class HistoryDataQueryCommand(object):
     def __init__(self, start: Timestamp, end: Timestamp, codes: List[str], window: int = 100):
         if not end:
@@ -63,6 +81,40 @@ class HistoryDataQueryCommand(object):
         self.end = end
         self.codes = codes
         self.window = window
+
+    def to_single_code_command(self):
+        commands: List[SingleCodeQueryCommand] = []
+        for code in self.codes:
+            commands.append(SingleCodeQueryCommand(self.start, self.end, code, self.window))
+        return commands
+
+
+class SingleCodeQueryCommand(HistoryDataQueryCommand):
+    def __init__(self, start: Timestamp, end: Timestamp, code: str, window: int = 100):
+        super().__init__(start, end, [code], window)
+        self.start = start
+        self.end = end
+        self.code = code
+        self.window = window
+
+    def minus(self, data_record: DataRecord) -> List:
+        """
+        要下载的数据减去已经存在的数据，就是增量的要下载的数据。
+        为了降低复杂度， 保证下载数据之后，数据库的数据要连续
+        :param data_record:
+        :return:
+        """
+        small_start = self.start if self.start < data_record.start else data_record.start
+        big_end = self.end if self.end > data_record.end else data_record.end
+        increment_commands = []
+        if small_start < data_record.start:
+            increment_commands.append(SingleCodeQueryCommand(small_start, data_record.start, self.code))
+        if big_end > data_record.end:
+            increment_commands.append(SingleCodeQueryCommand(data_record.end, big_end, self.code))
+        return increment_commands
+
+
+        pass
 
 
 class Asset(object):
@@ -131,13 +183,6 @@ class TimeSeriesSubscriber(metaclass=ABCMeta):
         pass
 
 
-class DataRecord(object):
-    def __init__(self, code: str, start: Timestamp, end: Timestamp):
-        self.code = code
-        self.start = start
-        self.end = end
-
-
 class TimeSeriesFunction(metaclass=ABCMeta):
     @abstractmethod
     def name(self) -> str:
@@ -145,6 +190,10 @@ class TimeSeriesFunction(metaclass=ABCMeta):
 
     @abstractmethod
     def load_history_data(self, command: HistoryDataQueryCommand) -> List[TSData]:
+        pass
+
+    @abstractmethod
+    def current_price(self, codes) -> Mapping[str, float]:
         pass
 
     @abstractmethod
@@ -206,6 +255,8 @@ class TimeSeriesFunction(metaclass=ABCMeta):
         return values
 
 
+
+
 class TimeSeries(object):
 
     def __init__(self, name: str = None, data_record: Mapping[str, DataRecord] = None):
@@ -241,7 +292,11 @@ class TimeSeries(object):
 
         df = DataFrame(data=df_data).set_index(['visible_time', 'code'])
         # 由于下载是批量下载，所以下载的数据可能比想要下载的数据要多
-        return df.sort_index(level=0).loc[command.start: command.end]
+        if command.start and command.end:
+            return df.sort_index(level=0).loc[command.start: command.end]
+        else:
+            df = df.sort_index(level=0)
+            return df.loc[df.index.get_level_values(0)[-command.window:]]
 
     def subscribe(self, subscriber: TimeSeriesSubscriber):
         pass
@@ -258,10 +313,36 @@ class TimeSeries(object):
         pass
 
     def download_data(self, command: HistoryDataQueryCommand):
-        ts_data_list: List[TSData] = self.func.load_history_data(command)
-        TimeSeriesDataRepo.save(ts_data_list)
-        logging.info("下载完成， 共下载了{}个数据".format(len(ts_data_list)))
+        increment_commands = []
+        commands: List[SingleCodeQueryCommand] = command.to_single_code_command()
+        for command in commands:
+            if command.code in self.data_record:
+                increment_commands.extend(command.minus(self.data_record[command.code]))
+            else:
+                increment_commands.append(command)
 
+        total_count = 0
+        for i_command in increment_commands:
+            data_list: List[TSData] = self.func.load_history_data(i_command)
+            TimeSeriesDataRepo.save(data_list)
+            if i_command.code in self.data_record:
+                self.data_record[i_command.code].update(i_command)
+            else:
+                self.data_record[i_command.code] = DataRecord(i_command.code, i_command.start, i_command.end)
+            self.save()
+            total_count += len(data_list)
+
+        logging.info("下载完成， 共下载了{}个数据".format(total_count))
+
+    def save(self):
+        data_record_map = {}
+        for code in self.data_record.keys():
+            dr:DataRecord = self.data_record[code]
+            data_record_map[code] = DataRecordModel(code=dr.code, start_time=dr.start, end_time=dr.end)
+        TimeSeriesModel.create(name=self.name, data_record=data_record_map).save()
+
+    def current_price(self, codes: List[str]) -> Mapping[str, float]:
+        return self.func.current_price(codes)
 
 
 class TSFunctionRegistry(object):
@@ -291,7 +372,8 @@ class TimeSeriesRepo(object):
             data_record = {}
             for key in model.data_record.keys():
                 dr_model: DataRecordModel = model.data_record[key]
-                data_record[key] = DataRecord(dr_model.code, dr_model.start_time, dr_model.end_time)
+                data_record[key] = DataRecord(dr_model.code, Timestamp(dr_model.start_time, tz='UTC'),
+                                              Timestamp(dr_model.end_time, tz='UTC'))
             ts = TimeSeries(name=model.name, data_record=data_record)
         elif r.count() > 1:
             raise RuntimeError("wrong data")

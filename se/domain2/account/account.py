@@ -5,6 +5,7 @@ from typing import *
 from pandas import Timedelta, Timestamp
 
 from se.domain2.engine.engine import Event, OrderStatusChangeEventDefinition
+from se.infras.models import AccountModel, OperationModel, UserOrderModel
 
 
 class OrderDirection(Enum):
@@ -24,11 +25,23 @@ class OrderStatus(Enum):
 
 
 class Bar(object):
-    pass
+    def __init__(self, code, start_time, visible_time, open_price, high_price, low_price, close_price, volume):
+        self.code = code
+        self.start_time = start_time
+        self.visible_time = visible_time
+        self.open_price = open_price
+        self.high_price = high_price
+        self.low_price = low_price
+        self.close_price = close_price
+        self.volume = volume
 
 
 class Tick(object):
-    pass
+    def __init__(self, code, visible_time, price, size):
+        self.code = code
+        self.visible_time = visible_time
+        self.price = price
+        self.size = size
 
 
 class MatchResult(object):
@@ -75,11 +88,12 @@ class Order(metaclass=ABCMeta):
 
 
 class MKTOrder(Order):
-    def bar_match(self, bar: Bar):
-        pass
+    def bar_match(self, bar: Bar) -> MatchResult:
+        # 以开盘价成交
+        return MatchResult(bar.open_price, self.quantity, bar.start_time, bar.visible_time)
 
-    def tick_match(self, tick: Tick):
-        pass
+    def tick_match(self, tick: Tick) -> MatchResult:
+        return MatchResult(tick.price, self.quantity, tick.visible_time, tick.visible_time)
 
     def __init__(self, code, direction, quantity, place_time):
         super().__init__(code, direction, quantity, place_time)
@@ -92,10 +106,16 @@ class DelayMKTOrder(Order):
         self.delay_time = delay_time
 
     def bar_match(self, bar: Bar):
-        pass
+        if bar.start_time >= (self.place_time + self.delay_time):
+            return MatchResult(bar.open_price, self.quantity, bar.start_time, bar.visible_time)
+        elif bar.visible_time >= (self.place_time + self.delay_time):
+            return MatchResult(bar.close_price, self.quantity, bar.start_time, bar.visible_time)
+        return None
 
     def tick_match(self, tick: Tick):
-        pass
+        if tick.visible_time >= (self.place_time + self.delay_time):
+            return MatchResult(tick.price, self.quantity, tick.visible_time, tick.visible_time)
+        return None
 
 
 class LimitOrder(Order):
@@ -105,10 +125,22 @@ class LimitOrder(Order):
         self.limit_price = limit_price
 
     def bar_match(self, bar: Bar):
-        pass
+        if self.direction == OrderDirection.BUY:
+            if bar.low_price <= self.limit_price:
+                return MatchResult(self.limit_price, self.quantity, bar.start_time, bar.visible_time)
+        else:
+            if bar.high_price >= self.limit_price:
+                return MatchResult(self.limit_price, self.quantity, bar.start_time, bar.visible_time)
+        return None
 
     def tick_match(self, tick: Tick):
-        pass
+        if self.direction == OrderDirection.BUY:
+            if tick.price <= self.limit_price:
+                return MatchResult(self.limit_price, self.quantity, tick.visible_time, tick.visible_time)
+        else:
+            if tick.price >= self.limit_price:
+                return MatchResult(self.limit_price, self.quantity, tick.visible_time, tick.visible_time)
+        return None
 
 
 class CrossMKTOrder(Order):
@@ -119,10 +151,22 @@ class CrossMKTOrder(Order):
         self.cross_price = cross_price
 
     def bar_match(self, bar: Bar):
-        pass
+        if self.cross_direction == CrossDirection.UP:
+            if bar.high_price >= self.cross_price:
+                return MatchResult(self.cross_price, self.quantity, bar.start_time, bar.visible_time)
+        else:
+            if bar.low_price <= self.cross_price:
+                return MatchResult(self.cross_price, self.quantity, bar.start_time, bar.visible_time)
+        return None
 
     def tick_match(self, tick: Tick):
-        pass
+        if self.cross_direction == CrossDirection.UP:
+            if tick.price >= self.cross_price:
+                return MatchResult(self.cross_price, self.quantity, tick.visible_time, tick.visible_time)
+        else:
+            if tick.price <= self.cross_price:
+                return MatchResult(self.cross_price, self.quantity, tick.visible_time, tick.visible_time)
+        return None
 
 
 class Operation(object):
@@ -150,6 +194,15 @@ class Operation(object):
                 open_orders.append(o)
         return open_orders
 
+    def to_model(self):
+        order_models = []
+        for o in self.orders:
+            order_models.append(
+                UserOrderModel.create(type=type(o).__name__, code=o.code, direction=o.direction.name, **o.__dict__))
+        return OperationModel.create(start_time=self.start_time,
+                                     end_time=self.end_time,
+                                     pnl=self.pnl, orders=order_models)
+
 
 class AbstractAccount(metaclass=ABCMeta):
 
@@ -158,7 +211,7 @@ class AbstractAccount(metaclass=ABCMeta):
         self.cash = initial_cash
         self.initial_cash = initial_cash
         self.positions = {}
-        self.history_net_value = {}
+        self.history_net_value: Mapping[Timestamp, float] = {}
         self.current_operation: Operation = Operation()
         self.history_operations: List[Operation] = []
 
@@ -171,6 +224,22 @@ class AbstractAccount(metaclass=ABCMeta):
 
     @abstractmethod
     def match(self, data) -> List[Event]:
+        pass
+
+    def save(self):
+        AccountModel.create(name=self.name, cash=self.cash, initial_cash=self.initial_cash, positions=self.positions,
+                            history_net_value=self.history_net_value,
+                            current_operation=self.current_operation.to_model(),
+                            history_operations=[operation.to_model() for operation in self.history_operations])
+        pass
+
+    def calc_net_value(self, current_price: Mapping[str, float], current_time: Timestamp):
+        net_value = 0
+        net_value += self.cash
+        for code in self.positions.keys():
+            net_value += current_price[code] * self.positions[code]
+        self.history_net_value[current_time] = net_value
+
         pass
 
 

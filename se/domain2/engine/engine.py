@@ -7,14 +7,9 @@ from pandas._libs.tslibs.timestamps import Timestamp
 from pinject import inject
 from trading_calendars import TradingCalendar
 
-from se.domain2.account.account import AbstractAccount, Order, Bar, Tick, OrderFilledEvent, BacktestAccount
+from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Tick
 from se.domain2.time_series.time_series import TimeSeriesRepo, HistoryDataQueryCommand
-
-
-class EventDefinition(object):
-
-    def __init__(self, name: str):
-        self.name = name
+from se.infras.models import AccountModel
 
 
 class Rule(metaclass=ABCMeta):
@@ -51,6 +46,18 @@ class MarketClose(Rule):
             return True
         return False
 
+class Event(object):
+    def __init__(self, name: str, visible_time: Timestamp, data: object):
+        self.name = name
+        self.visible_time = visible_time
+        self.data = data
+
+
+class EventDefinition(metaclass=ABCMeta):
+    def __init__(self, name, callback: Callable[[Event, AbstractAccount, object], List[Event]]):
+        self.name = name
+
+
 
 class TimeEventDefinition(EventDefinition):
     def __init__(self, name: str, date_rule: Rule, time_rule: Rule):
@@ -72,11 +79,7 @@ class OrderStatusChangeEventDefinition(EventDefinition):
         super().__init__(self.name)
 
 
-class Event(object):
-    def __init__(self, name: str, visible_time: Timestamp, data: object):
-        self.name = name
-        self.visible_time = visible_time
-        self.data = data
+
 
 
 class EventSubscriber(metaclass=ABCMeta):
@@ -126,17 +129,6 @@ class DataEventProducer(EventProducer):
         super().__init__(event_definitions)
 
 
-class DataPortal(object):
-
-    def history_data(self, ts_type_name, codes, end, window):
-        command = HistoryDataQueryCommand(None, end, codes, window)
-        return self.repo.find_one(ts_type_name).history_data(command)
-
-    @inject
-    def __init__(self, repo: TimeSeriesRepo):
-        self.repo = repo
-
-
 class EventRegister(object):
 
     def __init__(self, event_definition: EventDefinition,
@@ -149,15 +141,62 @@ class MatchService(EventRegister):
 
     def __init__(self, ts_type_name: str):
         ep = DataEventDefinition("match_data", ts_type_name)
+        self._current_price: Mapping[str, float] = {}
 
         def callback(event: Event, account: AbstractAccount, data_portal: DataPortal) -> List[Event]:
             if event.name != "match_data":
                 raise RuntimeError("wrong event name")
+            if isinstance(event.data, Bar):
+                self._current_price[event.data.code] = event.data.close_price
+            if isinstance(event.data, Tick):
+                self._current_price[event.data.code] = event.data.price
+            else:
+                raise RuntimeError("wrong event data")
+
             events = account.match(event.data)
 
             return events
 
-        super().__init__(ep, callback)
+        super().__init__(ep, callback=callback)
+
+    def current_price(self, codes: List[str]) -> Mapping[str, float]:
+        ret = {}
+        for code in codes:
+            ret[code] = self._current_price[code]
+        return ret
+
+
+class DataPortal(object):
+
+    def history_data(self, ts_type_name, codes, end, window):
+        command = HistoryDataQueryCommand(None, end, codes, window)
+        ts = TimeSeriesRepo.find_one(ts_type_name)
+        return ts.history_data(command)
+
+    def __init__(self, is_backtest: bool, match_service: MatchService, ts_type_name_for_current_price: str):
+        if is_backtest:
+            if not match_service:
+                raise RuntimeError("need match_service")
+        else:
+            if not ts_type_name_for_current_price:
+                raise RuntimeError("need ts_type_name_for_current_price")
+
+        self.ts_type_name_for_current_price = ts_type_name_for_current_price
+        self.is_backtest = is_backtest
+        self.match_service = match_service
+
+    def current_price(self, codes: List[str]):
+        """
+        在实盘或者回测的时候，获取当前价格的方式不同，实盘的时候，依赖某个时序类型来获取最新的价格。 但是在回测的时候，则会从撮合服务
+        中获取
+        :param codes:
+        :return:
+        """
+        if self.is_backtest:
+            return self.match_service.current_price(codes)
+        else:
+            ts = TimeSeriesRepo.find_one(self.ts_type_name_for_current_price)
+            return ts.current_price(codes)
 
 
 class AbstractStrategy(metaclass=ABCMeta):
@@ -193,22 +232,30 @@ class EventLine(object):
 
 class Engine(object):
 
-    def calc_net_value(self, event, account, data_portal):
-        pass
+    def calc_net_value(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
+        if len(account.positions) > 0:
+            current_price: Mapping[str, float] = self.data_portal.current_price(list(account.positions.keys()))
+            account.calc_net_value(current_price)
 
     @inject
-    def __init__(self, data_portal: DataPortal):
+    def __init__(self, data_portal: DataPortal, match_service: MatchService):
         self.data_portal = data_portal
         self.event_registers = []
+        self.match_service = match_service
+
+        self.event_registers.append(match_service)
 
     def run_backtest(self, strategy: AbstractStrategy, start: Timestamp, end: Timestamp, initial_cash: float,
-                     match_service: MatchService):
-        er = EventRegister(TimeEventDefinition("calc_net_value",
-                                               date_rule=EveryDay(),
-                                               time_rule=MarketClose(strategy.trading_calendar, 30)),
-                           self.calc_net_value)
-        self.event_registers.append(er)
-        self.event_registers.append(match_service)
+                     account_name: str):
+        # 检查test_id是否唯一
+        if not self.is_unique_account(account_name):
+            raise RuntimeError("account name重复")
+        calc_net_value_callback = EventRegister(TimeEventDefinition("calc_net_value",
+                                                                    date_rule=EveryDay(),
+                                                                    time_rule=MarketClose(strategy.trading_calendar,
+                                                                                          30)),
+                                                self.calc_net_value)
+        self.event_registers.append(calc_net_value_callback)
 
         time_event_definitions: List[TimeEventDefinition] = []
         data_event_definitions: List[DataEventDefinition] = []
@@ -228,20 +275,27 @@ class Engine(object):
             dep = DataEventProducer(data_event_definitions)
             event_line.add_all(dep.history_events(start, end))
 
-        account = BacktestAccount("test_name", initial_cash)
+        account = BacktestAccount(account_name, initial_cash)
         event: Event = event_line.pop_event()
         while event is not None:
             callback = callback_map[event.name]
             if event.name == "match_data":
-                order_status_change_events = callback(event, account, self.data_portal)
+                order_status_change_events: List[Event] = callback(event, account, self.data_portal)
                 if len(order_status_change_events) > 0:
                     for e in order_status_change_events:
                         strategy.order_status_change(e, account, self.data_portal)
             else:
                 callback(event, account, self.data_portal)
             event = event_line.pop_event()
-
+        # 存储以便后续分析用
+        account.save()
         return account
 
     def run(self, strategy: AbstractStrategy, account: AbstractAccount):
         pass
+
+    def is_unique_account(self, account_name):
+        accounts = AccountModel.objects(name=account_name).all()
+        if accounts and len(accounts) >= 0:
+            return False
+        return True
