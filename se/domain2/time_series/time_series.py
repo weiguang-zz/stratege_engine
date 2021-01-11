@@ -298,10 +298,10 @@ class TimeSeries(object):
             df = df.sort_index(level=0)
             return df.loc[df.index.get_level_values(0)[-command.window:]]
 
-    def subscribe(self, subscriber: TimeSeriesSubscriber):
+    def subscribe(self, subscriber: TimeSeriesSubscriber, codes: List[str]):
         pass
 
-    def unsubscribe(self, subscriber: TimeSeriesSubscriber):
+    def unsubscribe(self, subscriber: TimeSeriesSubscriber, codes: List[str]):
         pass
 
     def on_data(self, data: TSData):

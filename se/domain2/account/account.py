@@ -4,7 +4,7 @@ from typing import *
 
 from pandas import Timedelta, Timestamp
 
-from se.domain2.engine.engine import Event, OrderStatusChangeEventDefinition
+from se.domain2.engine.engine import Event
 from se.infras.models import AccountModel, OperationModel, UserOrderModel
 
 
@@ -84,7 +84,9 @@ class Order(metaclass=ABCMeta):
         self.filled_end_time = filled_end_time
         self.filled_avg_price = filled_price
         self.status = OrderStatus.FILLED
-        return Event(OrderStatusChangeEventDefinition.name, filled_end_time, self)
+
+    def cancel(self):
+        self.status = OrderStatus.CANCELED
 
 
 class MKTOrder(Order):
@@ -203,10 +205,20 @@ class Operation(object):
                                      end_time=self.end_time,
                                      pnl=self.pnl, orders=order_models)
 
+    def cancel_all_open_orders(self):
+
+        pass
+
+
+class OrderCallback(metaclass=ABCMeta):
+    @abstractmethod
+    def order_status(self, order, account, context):
+        pass
+
 
 class AbstractAccount(metaclass=ABCMeta):
 
-    def __init__(self, name: str, initial_cash: float):
+    def __init__(self, name: str, initial_cash: float, order_callback: OrderCallback):
         self.name = name
         self.cash = initial_cash
         self.initial_cash = initial_cash
@@ -214,6 +226,7 @@ class AbstractAccount(metaclass=ABCMeta):
         self.history_net_value: Mapping[Timestamp, float] = {}
         self.current_operation: Operation = Operation()
         self.history_operations: List[Operation] = []
+        self.order_callback = order_callback
 
     @abstractmethod
     def place_order(self, order: Order):
@@ -223,7 +236,7 @@ class AbstractAccount(metaclass=ABCMeta):
         return self.current_operation.get_open_orders()
 
     @abstractmethod
-    def match(self, data) -> List[Event]:
+    def match(self, data, context) -> List[Event]:
         pass
 
     def save(self):
@@ -242,9 +255,15 @@ class AbstractAccount(metaclass=ABCMeta):
 
         pass
 
+    def cancel_all_open_orders(self):
+        self.current_operation.cancel_all_open_orders()
+        for open_order in self.current_operation.get_open_orders():
+            open_order.cancel()
+            self.order_callback.order_status(open_order, self, None)
+
 
 class BacktestAccount(AbstractAccount):
-    def match(self, data) -> List[Event]:
+    def match(self, data, context):
         open_orders = self.get_open_orders()
         events = []
         for o in open_orders:
@@ -276,7 +295,7 @@ class BacktestAccount(AbstractAccount):
                     self.history_operations.append(self.current_operation)
                     self.current_operation = next_operation
 
-                events.append(e)
+            self.order_callback.order_status(o, self, context)
 
         return events
 
