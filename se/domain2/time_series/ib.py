@@ -14,7 +14,7 @@ import time
 
 from se import config
 
-from .time_series import TimeSeriesFunction, Column, Subscription, Asset, HistoryDataQueryCommand, TSData
+from .time_series import TimeSeriesFunction, Column, Subscription, Asset, HistoryDataQueryCommand, TSData, Price
 
 
 class Request(object):
@@ -202,7 +202,7 @@ class IBMinBar(TimeSeriesFunction):
 
         return all_ts_datas
 
-    def current_price(self, codes) -> Mapping[str, float]:
+    def current_price(self, codes) -> Mapping[str, Price]:
         raise RuntimeError("not supported")
 
     def load_assets(self) -> List[Asset]:

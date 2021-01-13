@@ -9,6 +9,13 @@ import logging
 from se.infras.models import TimeSeriesModel, DataRecordModel, TimeSeriesDataModel
 
 
+class Price(object):
+
+    def __init__(self, code, price, time: Timestamp):
+        self.code = code
+        self.price = price
+        self.time = time
+
 class Column(object):
 
     def __init__(self, name: str, tp: Type, parse_func, serialize_func, deserialize_func):
@@ -193,7 +200,7 @@ class TimeSeriesFunction(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def current_price(self, codes) -> Mapping[str, float]:
+    def current_price(self, codes) -> Mapping[str, Price]:
         pass
 
     @abstractmethod
@@ -256,7 +263,6 @@ class TimeSeriesFunction(metaclass=ABCMeta):
 
 
 
-
 class TimeSeries(object):
 
     def __init__(self, name: str = None, data_record: Mapping[str, DataRecord] = None):
@@ -283,6 +289,9 @@ class TimeSeries(object):
         if not from_local:
             ts_data_list = self.func.load_history_data(command)
         else:
+            if not self.is_local_cached(command):
+                logging.info("本地数据没有缓存，将会下载")
+                self.download_data(command)
             ts_data_list = TimeSeriesDataRepo.query(self.name, command)
 
         # change to DataFrame, MultiIndex (visible_time, code)
@@ -341,8 +350,18 @@ class TimeSeries(object):
             data_record_map[code] = DataRecordModel(code=dr.code, start_time=dr.start, end_time=dr.end)
         TimeSeriesModel.create(name=self.name, data_record=data_record_map).save()
 
-    def current_price(self, codes: List[str]) -> Mapping[str, float]:
+    def current_price(self, codes: List[str]) -> Mapping[str, Price]:
         return self.func.current_price(codes)
+
+    def is_local_cached(self, command: HistoryDataQueryCommand):
+        increment_commands = []
+        commands: List[SingleCodeQueryCommand] = command.to_single_code_command()
+        for command in commands:
+            if command.code in self.data_record:
+                increment_commands.extend(command.minus(self.data_record[command.code]))
+            else:
+                increment_commands.append(command)
+        return len(increment_commands) <= 0
 
 
 class TSFunctionRegistry(object):

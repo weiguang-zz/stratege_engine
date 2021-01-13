@@ -1,10 +1,10 @@
+import logging
 from abc import *
 from enum import Enum
 from typing import *
 
 from pandas import Timedelta, Timestamp
 
-from se.domain2.engine.engine import Event
 from se.infras.models import AccountModel, OperationModel, UserOrderModel
 
 
@@ -25,15 +25,20 @@ class OrderStatus(Enum):
 
 
 class Bar(object):
-    def __init__(self, code, start_time, visible_time, open_price, high_price, low_price, close_price, volume):
-        self.code = code
-        self.start_time = start_time
-        self.visible_time = visible_time
-        self.open_price = open_price
-        self.high_price = high_price
-        self.low_price = low_price
-        self.close_price = close_price
-        self.volume = volume
+    def __init__(self, **kwargs):
+        names = ['code', 'start_time', 'visible_time', 'open', 'high', 'low', 'close', 'volume']
+        for n in names:
+            if n not in kwargs:
+                raise RuntimeError("need key:"+ n)
+
+        self.code = kwargs['code']
+        self.start_time = kwargs['start_time']
+        self.visible_time = kwargs['visible_time']
+        self.open_price = kwargs['open']
+        self.high_price = kwargs['high']
+        self.low_price = kwargs['low']
+        self.close_price = kwargs['close']
+        self.volume = kwargs['volume']
 
 
 class Tick(object):
@@ -74,7 +79,7 @@ class Order(metaclass=ABCMeta):
     def tick_match(self, tick: Tick) -> MatchResult:
         pass
 
-    def order_filled(self, filled_quantity, filled_price, filled_start_time, filled_end_time) -> Event:
+    def order_filled(self, filled_quantity, filled_price, filled_start_time, filled_end_time):
         if self.status == OrderStatus.FILLED or self.status == OrderStatus.CANCELED:
             raise RuntimeError("wrong order status")
         self.filled_quantity += filled_quantity
@@ -182,11 +187,12 @@ class Operation(object):
         if len(self.orders) <= 0:
             raise RuntimeError("操作没有订单")
         self.end_time = self.orders[-1].filled_end_time
+        self.pnl = self.calc_pnl()
         return Operation()
 
     def add_order(self, order: Order):
         if len(self.orders) <= 0:
-            self.start_time = order.filled_start_time
+            self.start_time = order.place_time
         self.orders.append(order)
 
     def get_open_orders(self):
@@ -199,20 +205,30 @@ class Operation(object):
     def to_model(self):
         order_models = []
         for o in self.orders:
+            kwargs = o.__dict__
+            kwargs.update({"direction": o.direction.name, "status": o.status.name})
+            if isinstance(o, CrossMKTOrder):
+                kwargs.update({"cross_direction": o.cross_direction.name if o.cross_direction else None})
             order_models.append(
-                UserOrderModel.create(type=type(o).__name__, code=o.code, direction=o.direction.name, **o.__dict__))
-        return OperationModel.create(start_time=self.start_time,
-                                     end_time=self.end_time,
-                                     pnl=self.pnl, orders=order_models)
+                UserOrderModel(type=type(o).__name__, **kwargs))
+        return OperationModel(start_time=self.start_time,
+                              end_time=self.end_time,
+                              pnl=self.pnl, orders=order_models)
 
-    def cancel_all_open_orders(self):
-
-        pass
+    def calc_pnl(self):
+        pnl = 0
+        for od in self.orders:
+            if od.status == OrderStatus.FILLED:
+                if od.direction == OrderDirection.BUY:
+                    pnl -= od.filled_avg_price * od.filled_quantity
+                else:
+                    pnl += od.filled_avg_price * od.filled_quantity
+        return pnl
 
 
 class OrderCallback(metaclass=ABCMeta):
     @abstractmethod
-    def order_status(self, order, account, context):
+    def order_status_change(self, order, account):
         pass
 
 
@@ -236,15 +252,16 @@ class AbstractAccount(metaclass=ABCMeta):
         return self.current_operation.get_open_orders()
 
     @abstractmethod
-    def match(self, data, context) -> List[Event]:
+    def match(self, data):
         pass
 
     def save(self):
-        AccountModel.create(name=self.name, cash=self.cash, initial_cash=self.initial_cash, positions=self.positions,
-                            history_net_value=self.history_net_value,
-                            current_operation=self.current_operation.to_model(),
-                            history_operations=[operation.to_model() for operation in self.history_operations])
-        pass
+        acc = AccountModel.create(name=self.name, cash=self.cash, initial_cash=self.initial_cash,
+                                  positions=self.positions,
+                                  history_net_value=self.history_net_value,
+                                  current_operation=self.current_operation.to_model(),
+                                  history_operations=[operation.to_model() for operation in self.history_operations])
+        acc.save()
 
     def calc_net_value(self, current_price: Mapping[str, float], current_time: Timestamp):
         net_value = 0
@@ -256,16 +273,14 @@ class AbstractAccount(metaclass=ABCMeta):
         pass
 
     def cancel_all_open_orders(self):
-        self.current_operation.cancel_all_open_orders()
         for open_order in self.current_operation.get_open_orders():
             open_order.cancel()
-            self.order_callback.order_status(open_order, self, None)
+            self.order_callback.order_status_change(open_order, self)
 
 
 class BacktestAccount(AbstractAccount):
-    def match(self, data, context):
+    def match(self, data):
         open_orders = self.get_open_orders()
-        events = []
         for o in open_orders:
             match_result: MatchResult = None
             if isinstance(data, Bar):
@@ -276,8 +291,9 @@ class BacktestAccount(AbstractAccount):
                 raise RuntimeError("wrong data")
             if match_result:
                 # change position
-                e = o.order_filled(match_result.filled_quantity, match_result.filled_price,
-                                   match_result.filled_start_time, match_result.filled_end_time)
+                o.order_filled(match_result.filled_quantity, match_result.filled_price,
+                               match_result.filled_start_time, match_result.filled_end_time)
+
                 # 修改持仓
                 quantity_change = match_result.filled_quantity
                 if o.direction == OrderDirection.SELL:
@@ -295,9 +311,7 @@ class BacktestAccount(AbstractAccount):
                     self.history_operations.append(self.current_operation)
                     self.current_operation = next_operation
 
-            self.order_callback.order_status(o, self, context)
-
-        return events
+                self.order_callback.order_status_change(o, self)
 
     def place_order(self, order: Order):
         self.current_operation.add_order(order)

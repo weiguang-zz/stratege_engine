@@ -3,4 +3,4 @@
 
 -- select * from time_series_data limit 10;
 
-select * from time_series;
+select * from account;
