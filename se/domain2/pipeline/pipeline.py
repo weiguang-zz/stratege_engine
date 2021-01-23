@@ -3,7 +3,6 @@ from typing import *
 
 from pandas import DatetimeIndex, DataFrame
 import pandas as pd
-import numpy as np
 from pandas._libs.tslibs.timestamps import Timestamp
 
 from se.domain2.time_series.time_series import TimeSeries, HistoryDataQueryCommand, TimeSeriesRepo
@@ -26,7 +25,7 @@ class Column(metaclass=ABCMeta):
 class LoadableColumn(Column):
 
     def get_data(self, domain: Domain):
-        ts: TimeSeries = TimeSeriesRepo.find_one(self.ts_type_name)
+        ts: TimeSeries = BeanContainer.getBean(TimeSeriesRepo).find_one(self.ts_type_name)
         df = ts.history_data(HistoryDataQueryCommand(domain.start, domain.end, domain.codes))
         return df[self.ts_type_column_name].unstack()[domain.codes]
 

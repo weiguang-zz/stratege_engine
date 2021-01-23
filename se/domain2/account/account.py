@@ -5,23 +5,23 @@ from typing import *
 
 from pandas import Timedelta, Timestamp
 
-from se.infras.models import AccountModel, OperationModel, UserOrderModel
+from se.domain2.domain import BeanContainer
 
 
 class OrderDirection(Enum):
-    BUY = 0
-    SELL = 1
+    BUY = "BUY"
+    SELL = "SELL"
 
 
 class CrossDirection(Enum):
-    UP = 0
-    DOWN = 1
+    UP = "UP"
+    DOWN = "DOWN"
 
 
 class OrderStatus(Enum):
-    CREATED = 0
-    CANCELED = 1
-    FILLED = 2
+    CREATED = "CREATED"
+    CANCELED = "CANCELED"
+    FILLED = "FILLED"
 
 
 class Bar(object):
@@ -29,7 +29,7 @@ class Bar(object):
         names = ['code', 'start_time', 'visible_time', 'open', 'high', 'low', 'close', 'volume']
         for n in names:
             if n not in kwargs:
-                raise RuntimeError("need key:"+ n)
+                raise RuntimeError("need key:" + n)
 
         self.code = kwargs['code']
         self.start_time = kwargs['start_time']
@@ -57,6 +57,13 @@ class MatchResult(object):
         self.filled_end_time = filled_end_time
 
 
+class OrderExecution(object):
+    def __init__(self, id: str, commission: float, origin: str):
+        self.id = id
+        self.commission = commission
+        self.origin = origin
+
+
 class Order(metaclass=ABCMeta):
 
     def __init__(self, code, direction, quantity, place_time):
@@ -70,6 +77,7 @@ class Order(metaclass=ABCMeta):
         self.filled_quantity = 0
         self.filled_avg_price = 0
         self.fee = 0
+        self.execution_map = {}
 
     @abstractmethod
     def bar_match(self, bar: Bar) -> MatchResult:
@@ -89,9 +97,32 @@ class Order(metaclass=ABCMeta):
         self.filled_end_time = filled_end_time
         self.filled_avg_price = filled_price
         self.status = OrderStatus.FILLED
+        logging.info("订单成交:{}".format(self.__dict__))
+
+    def order_filled_realtime(self, remaining: float, filled_avg_price: float):
+        if remaining <= 0:
+            self.status = OrderStatus.FILLED
+            self.filled_end_time = Timestamp.now(tz='Asia/Shanghai')
+        if not self.filled_start_time:
+            self.filled_start_time = Timestamp.now(tz='Asia/shanghai')
+        self.filled_quantity = self.quantity - remaining
+        self.filled_avg_price = filled_avg_price
+
+    def add_execution(self, oe: OrderExecution):
+        self.execution_map[oe.id] = oe
 
     def cancel(self):
         self.status = OrderStatus.CANCELED
+
+    def remaining(self):
+        return self.quantity - self.filled_quantity
+
+    def net_value(self):
+        # 该订单对现金的影响
+        v = self.filled_avg_price * self.filled_quantity
+        if self.direction == OrderDirection.SELL:
+            v = -v
+        return v
 
 
 class MKTOrder(Order):
@@ -177,18 +208,19 @@ class CrossMKTOrder(Order):
 
 
 class Operation(object):
-    def __init__(self):
+    def __init__(self, start_cash: float):
         self.start_time = None
         self.end_time = None
         self.pnl = 0
         self.orders: List[Order] = []
+        self.start_cash = start_cash
 
-    def end(self):
+    def end(self, start_cash: float):
         if len(self.orders) <= 0:
             raise RuntimeError("操作没有订单")
         self.end_time = self.orders[-1].filled_end_time
         self.pnl = self.calc_pnl()
-        return Operation()
+        return Operation(start_cash)
 
     def add_order(self, order: Order):
         if len(self.orders) <= 0:
@@ -201,19 +233,6 @@ class Operation(object):
             if o.status == OrderStatus.CREATED:
                 open_orders.append(o)
         return open_orders
-
-    def to_model(self):
-        order_models = []
-        for o in self.orders:
-            kwargs = o.__dict__
-            kwargs.update({"direction": o.direction.name, "status": o.status.name})
-            if isinstance(o, CrossMKTOrder):
-                kwargs.update({"cross_direction": o.cross_direction.name if o.cross_direction else None})
-            order_models.append(
-                UserOrderModel(type=type(o).__name__, **kwargs))
-        return OperationModel(start_time=self.start_time,
-                              end_time=self.end_time,
-                              pnl=self.pnl, orders=order_models)
 
     def calc_pnl(self):
         pnl = 0
@@ -234,15 +253,18 @@ class OrderCallback(metaclass=ABCMeta):
 
 class AbstractAccount(metaclass=ABCMeta):
 
-    def __init__(self, name: str, initial_cash: float, order_callback: OrderCallback):
+    def __init__(self, name: str, initial_cash: float):
         self.name = name
         self.cash = initial_cash
         self.initial_cash = initial_cash
         self.positions = {}
         self.history_net_value: Mapping[Timestamp, float] = {}
-        self.current_operation: Operation = Operation()
+        self.current_operation: Operation = Operation(initial_cash)
         self.history_operations: List[Operation] = []
+
+    def with_order_callback(self, order_callback: OrderCallback):
         self.order_callback = order_callback
+        return self
 
     @abstractmethod
     def place_order(self, order: Order):
@@ -256,12 +278,8 @@ class AbstractAccount(metaclass=ABCMeta):
         pass
 
     def save(self):
-        acc = AccountModel.create(name=self.name, cash=self.cash, initial_cash=self.initial_cash,
-                                  positions=self.positions,
-                                  history_net_value=self.history_net_value,
-                                  current_operation=self.current_operation.to_model(),
-                                  history_operations=[operation.to_model() for operation in self.history_operations])
-        acc.save()
+        account_repo: AccountRepo = BeanContainer.getBean(AccountRepo)
+        account_repo.save(self)
 
     def calc_net_value(self, current_price: Mapping[str, float], current_time: Timestamp):
         net_value = 0
@@ -270,18 +288,28 @@ class AbstractAccount(metaclass=ABCMeta):
             net_value += current_price[code] * self.positions[code]
         self.history_net_value[current_time] = net_value
 
-        pass
-
     def cancel_all_open_orders(self):
         for open_order in self.current_operation.get_open_orders():
             open_order.cancel()
             self.order_callback.order_status_change(open_order, self)
 
 
+class AccountRepo(metaclass=ABCMeta):
+    @abstractmethod
+    def save(self, self1):
+        pass
+
+    @abstractmethod
+    def find_one(self, account_name):
+        pass
+
+
 class BacktestAccount(AbstractAccount):
     def match(self, data):
         open_orders = self.get_open_orders()
         for o in open_orders:
+            if o.status != OrderStatus.CREATED:
+                continue
             match_result: MatchResult = None
             if isinstance(data, Bar):
                 match_result = o.bar_match(data)
@@ -293,6 +321,12 @@ class BacktestAccount(AbstractAccount):
                 # change position
                 o.order_filled(match_result.filled_quantity, match_result.filled_price,
                                match_result.filled_start_time, match_result.filled_end_time)
+
+                # 修改账户现金
+                if o.direction == OrderDirection.SELL:
+                    self.cash += match_result.filled_quantity * match_result.filled_price
+                else:
+                    self.cash -= match_result.filled_quantity * match_result.filled_price
 
                 # 修改持仓
                 quantity_change = match_result.filled_quantity
@@ -307,11 +341,12 @@ class BacktestAccount(AbstractAccount):
                     self.positions.pop(o.code)
 
                 if len(self.positions) <= 0:
-                    next_operation = self.current_operation.end()
+                    next_operation = self.current_operation.end(self.cash)
                     self.history_operations.append(self.current_operation)
                     self.current_operation = next_operation
 
                 self.order_callback.order_status_change(o, self)
 
     def place_order(self, order: Order):
+        logging.info("下单：{}".format(str(order.__dict__)))
         self.current_operation.add_order(order)

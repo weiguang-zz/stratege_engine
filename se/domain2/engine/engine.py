@@ -6,15 +6,15 @@ from enum import Enum
 from threading import Thread
 from typing import *
 
-from pandas import DatetimeIndex
+from pandas import DatetimeIndex, Series
 from pandas._libs.tslibs.timedeltas import Timedelta
 from pandas._libs.tslibs.timestamps import Timestamp
 from trading_calendars import TradingCalendar
 
-from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Tick, OrderCallback
+from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Tick, OrderCallback, AccountRepo
+from se.domain2.domain import BeanContainer
 from se.domain2.time_series.time_series import TimeSeriesRepo, HistoryDataQueryCommand, TimeSeriesSubscriber, TSData, \
     Price
-from se.infras.models import AccountModel
 
 
 class Rule(metaclass=ABCMeta):
@@ -113,6 +113,26 @@ class EventDefinition(object):
                 return -1
 
 
+class MockedEventProducer(object):
+
+    def start(self, scope: Scope):
+        mocked_events = []
+        for ed in self.event_definitions:
+            mocked_events.extend(self.mocked_event_generator(ed))
+
+        mocked_events = sorted(mocked_events)
+        for event in mocked_events:
+            self.subscriber.on_event(event)
+
+    def subscribe(self, subscriber: EventSubscriber):
+        self.subscriber = subscriber
+
+    def __init__(self, mocked_event_generator: Callable[EventDefinition, List[Event]],
+                 event_definitions: List[EventDefinition]):
+        self.mocked_event_generator = mocked_event_generator
+        self.event_definitions = event_definitions
+
+
 class EventProducer(TimeSeriesSubscriber):
 
     def on_data(self, data: TSData):
@@ -142,11 +162,11 @@ class EventProducer(TimeSeriesSubscriber):
                            Timedelta(minutes=1)
             market_opens = market_opens[(market_opens >= start) & (market_opens <= end)]
             market_closes = DatetimeIndex(scope.trading_calendar.closes.values, tz="UTC")
-            market_closes = market_closes[(market_closes>=start) & (market_closes<=end)]
+            market_closes = market_closes[(market_closes >= start) & (market_closes <= end)]
 
             for ed in self.data_event_definitions:
 
-                ts = TimeSeriesRepo.find_one(ed.ts_type_name)
+                ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ed.ts_type_name)
                 command = HistoryDataQueryCommand(start, end, scope.codes)
                 df = ts.history_data(command, from_local=True)
                 for (visible_time, code), values in df.iterrows():
@@ -193,7 +213,7 @@ class EventProducer(TimeSeriesSubscriber):
                 time_event_definitions.append(ed)
 
             else:
-                ts = TimeSeriesRepo.find_one(ed.ts_type_name)
+                ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ed.ts_type_name)
                 ts.subscribe(self, scope.codes)
 
         TimeEventThread(self.subscriber, time_event_definitions, scope.trading_calendar).start()
@@ -329,7 +349,7 @@ class TimeEventThread(Thread):
 #
 #     def start(self, scope: Scope):
 #         for ed in self.event_definitions:
-#             ts = TimeSeriesRepo.find_one(ed.name)
+#             ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ed.name)
 #             ts.subscribe(self, scope.codes)
 #
 #     def history_events(self, scope: Scope, start: Timestamp, end: Timestamp):
@@ -337,7 +357,7 @@ class TimeEventThread(Thread):
 #         for ed in self.event_definitions:
 #             if not isinstance(ed, DataEventDefinition):
 #                 raise RuntimeError("wrong event definition")
-#             ts = TimeSeriesRepo.find_one(ed.ts_type_name)
+#             ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ed.ts_type_name)
 #             command = HistoryDataQueryCommand(start, end, scope.codes)
 #             df = ts.history_data(command, from_local=True)
 #             for (visible_time, code), values in df.iterrows():
@@ -363,30 +383,41 @@ class DataPortal(object):
 
     def history_data(self, ts_type_name, codes, end, window):
         command = HistoryDataQueryCommand(None, end, codes, window)
-        ts = TimeSeriesRepo.find_one(ts_type_name)
+        ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ts_type_name)
         return ts.history_data(command)
 
-    def __init__(self, is_backtest: bool, ts_type_name_for_current_price: str = None):
+    def __init__(self, is_backtest: bool, ts_type_name_for_current_price: str = None, is_realtime_test: bool = False,
+                 mocked_current_prices: Dict = {}):
         if not is_backtest:
-            if not ts_type_name_for_current_price:
+            if is_realtime_test and not mocked_current_prices:
+                raise RuntimeError("实盘测试的时候，必须指定mocked的当前价格")
+
+            if not is_realtime_test and not ts_type_name_for_current_price:
                 raise RuntimeError("need ts_type_name_for_current_price")
 
         self.ts_type_name_for_current_price = ts_type_name_for_current_price
         self.is_backtest = is_backtest
         self._current_price_map: Mapping[str, Price] = {}
+        self.is_realtime_test = is_realtime_test
+        self.mocked_current_price = Series(mocked_current_prices)
 
-    def current_price(self, codes: List[str]) -> Mapping[str, Price]:
+    def current_price(self, codes: List[str], current_time: Timestamp) -> Mapping[str, Price]:
         """
         在实盘或者回测的时候，获取当前价格的方式不同，实盘的时候，依赖某个时序类型来获取最新的价格。 但是在回测的时候，会从缓存中获取，
         缓存是撮合的时候构建的
+        :param current_time:
         :param codes:
         :return:
         """
         if self.is_backtest:
             return {code: self._current_price_map[code] for code in codes}
         else:
-            ts = TimeSeriesRepo.find_one(self.ts_type_name_for_current_price)
-            return ts.current_price(codes)
+            if not self.is_realtime_test:
+                ts = BeanContainer.getBean(TimeSeriesRepo).find_one(self.ts_type_name_for_current_price)
+                return ts.current_price(codes)
+            else:
+                cp = self.mocked_current_price[current_time]
+                return {code: Price(code, cp[code], current_time) for code in cp.keys() if code in codes}
 
     def set_current_price(self, code, cp: Price):
         self._current_price_map[code] = cp
@@ -420,9 +451,12 @@ class EventLine(object):
 
 def calc_net_value(event: Event, account: AbstractAccount, data_portal: DataPortal):
     if len(account.positions) > 0:
-        current_price: Mapping[str, Price] = data_portal.current_price(list(account.positions.keys()))
+        current_price: Mapping[str, Price] = data_portal.current_price(list(account.positions.keys()),
+                                                                       event.visible_time)
         cp = {code: current_price[code].price for code in current_price.keys()}
-        account.calc_net_value(cp, event.visible_time)
+    else:
+        cp = {}
+    account.calc_net_value(cp, event.visible_time)
 
 
 class Engine(EventSubscriber):
@@ -502,13 +536,24 @@ class Engine(EventSubscriber):
         event: Event = event_line.pop_event()
         while event is not None:
             callback = self.callback_for(event.event_definition)
-            callback(event, account, data_portal)
+            try:
+                callback(event, account, data_portal)
+            except:
+                import traceback
+                logging.error("{}".format(traceback.format_exc()))
+
             event = event_line.pop_event()
         # 存储以便后续分析用
         account.save()
         return account
 
-    def run(self, strategy: AbstractStrategy, scope: Scope, account: AbstractAccount):
+    def run(self, strategy: AbstractStrategy, account: AbstractAccount, is_realtime_test: bool = False,
+            mocked_events_generator: Callable[EventDefinition, List[Event]] = None,
+            mocked_current_prices: Dict = None):
+        if is_realtime_test:
+            if not mocked_events_generator or not mocked_current_prices:
+                raise RuntimeError("需要mocked_events_generator， mocked_current_prices")
+
         strategy.initialize(self)
         self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(30)),
                             calc_net_value)
@@ -523,12 +568,17 @@ class Engine(EventSubscriber):
         #     dep = DataEventProducer(data_event_definitions)
         #     dep.subscribe(self)
         #     dep.start(strategy.scope)
-        ep = EventProducer(self.event_definitions)
-        ep.subscribe(self)
-        ep.start(strategy.scope)
-
         self.account = account
-        self.data_portal = DataPortal(False, "ibTick")
+        self.data_portal = DataPortal(False, "ibTick", is_realtime_test=is_realtime_test,
+                                      mocked_current_prices=mocked_current_prices)
+        if not mocked_events_generator:
+            ep = EventProducer(self.event_definitions)
+            ep.subscribe(self)
+            ep.start(strategy.scope)
+        else:
+            mocked_ep = MockedEventProducer(mocked_events_generator, self.event_definitions)
+            mocked_ep.subscribe(self)
+            mocked_ep.start(strategy.scope)
 
     def __init__(self):
         self.callback_map = {}
@@ -547,7 +597,9 @@ class Engine(EventSubscriber):
         return self.callback_map[event_definition]
 
     def is_unique_account(self, account_name):
-        accounts = AccountModel.objects(name=account_name).all()
-        if accounts and len(accounts) >= 0:
+
+        account_repo: AccountRepo = BeanContainer.getBean(AccountRepo)
+        if not account_repo.find_one(account_name):
+            return True
+        else:
             return False
-        return True

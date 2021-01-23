@@ -4,6 +4,13 @@ from cassandra.cqlengine.models import Model
 from cassandra.cqlengine.usertype import UserType
 
 
+class UserOrderExecutionModel(UserType):
+    __type_name__ = "user_order_execution"
+    id = columns.Text(required=True)
+    commission = columns.Float(required=True)
+    origin = columns.Text(required=True)
+
+
 class UserOrderModel(UserType):
     __type_name__ = "user_order"
     type = columns.Text(required=True)
@@ -17,10 +24,11 @@ class UserOrderModel(UserType):
     filled_quantity = columns.Float()
     filled_avg_price = columns.Float()
     fee = columns.Float()
-    delay_time = columns.DateTime()
+    delay_time = columns.Text()
     limit_price = columns.Float()
     cross_price = columns.Float()
     cross_direction = columns.Text()
+    execution_map = columns.Map(key_type=columns.Text, value_type=UserDefinedType(UserOrderExecutionModel), default={})
 
 
 class OperationModel(UserType):
@@ -28,11 +36,13 @@ class OperationModel(UserType):
     start_time = columns.DateTime()
     end_time = columns.DateTime()
     pnl = columns.Float()
+    start_cash = columns.Float()
     orders = columns.List(value_type=UserDefinedType(UserOrderModel), default=[])
 
 
 class AccountModel(Model):
     __table_name__ = "account"
+    tp = columns.Text(required=True)
     name = columns.Text(required=True, primary_key=True)
     cash = columns.Float(required=True)
     initial_cash = columns.Float(required=True)

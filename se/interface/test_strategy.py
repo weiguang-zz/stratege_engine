@@ -25,7 +25,7 @@ class TestStrategy1(AbstractStrategy):
         open_time = event.visible_time
         code = self.scope.codes[0]
         while True:
-            cp = data_portal.current_price([code])[code]
+            cp = data_portal.current_price([code], event.visible_time)[code]
             if cp.time >= open_time:
                 break
             logging.info("没有获取到最新的价格，将会重试, 获取到的价格是:{}, 事件时间是:{}".format(cp, event.visible_time))
@@ -48,6 +48,8 @@ class TestStrategy1(AbstractStrategy):
         if current_time >= (self.scope.trading_calendar.next_close(current_time) - Timedelta(minutes=1)):
             # 收盘前一分钟不下单
             return
+        # 取消当前所有的订单
+        account.cancel_all_open_orders()
 
         # 挂上下两个网格的交易订单
         k = round((order.filled_avg_price - self.base_price) / self.base_price / self.p)
@@ -77,9 +79,22 @@ class TestStrategy1(AbstractStrategy):
         self.p = p
         self.code = scope.codes[0]
 
-from trading_calendars import get_calendar
+# from trading_calendars import get_calendar
 
-scope = Scope(codes=['CCL_STK_USD_SMART'], trading_calendar=get_calendar("NYSE"))
-start = Timestamp("2020-01-01", tz='Asia/Shanghai')
-end = Timestamp("2020-01-30", tz='Asia/Shanghai')
-Engine().run_backtest(TestStrategy1(scope), start, end, 10000, "test3")
+# scope = Scope(codes=['CCL_STK_USD_SMART'], trading_calendar=get_calendar("NYSE"))
+# start = Timestamp("2020-01-01", tz='Asia/Shanghai')
+# end = Timestamp("2020-01-30", tz='Asia/Shanghai')
+# Engine().run_backtest(TestStrategy1(scope), start, end, 10000, "test3")
+
+if __name__ == "__main__":
+    # 计算策略的回报序列
+    from trading_calendars import get_calendar
+    import pandas as pd
+    calendar = get_calendar("NYSE")
+    engine = Engine()
+    scope = Scope(['CCL_STK_USD_SMART'], calendar)
+    st = TestStrategy1(scope, n=5, p=0.01)
+    start = pd.Timestamp("2020-01-01", tz='Asia/Shanghai')
+    end = pd.Timestamp("2020-01-30", tz='Asia/Shanghai')
+    result = engine.run_backtest(st, start, end, 10000, "test16")
+    print("done")

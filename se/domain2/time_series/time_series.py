@@ -6,8 +6,7 @@ from abc import *
 import json
 import logging
 
-from se.infras.models import TimeSeriesModel, DataRecordModel, TimeSeriesDataModel
-
+from se.domain2.domain import BeanContainer
 
 class Price(object):
 
@@ -148,34 +147,16 @@ class TSData(object):
 class TimeSeriesDataRepo(object):
     @classmethod
     def save(cls, data_list: List[TSData]):
-        b = BatchQuery()
-        for ts_data in data_list:
-            func = TSFunctionRegistry.find_function(ts_data.ts_type_name)
-            value_serialized: str = func.serialize(ts_data.values)
-            TimeSeriesDataModel.batch(b).create(type=ts_data.ts_type_name, code=ts_data.code,
-                                                visible_time=ts_data.visible_time, data=value_serialized)
-        b.execute()
+        time_series_repo = BeanContainer.getBean(TimeSeriesRepo)
+        time_series_repo.save_ts(data_list)
+
+
 
     @classmethod
     def query(cls, ts_type_name: str, command: HistoryDataQueryCommand) -> List[TSData]:
-        data_list: List[TSData] = []
-        if command.start and command.end:
-            r: ModelQuerySet = TimeSeriesDataModel.objects.filter(type=ts_type_name, code__in=command.codes,
-                                                                  visible_time__gte=command.start,
-                                                                  visible_time__lte=command.end)
-        else:
-            r: ModelQuerySet = TimeSeriesDataModel.objects.filter(type=ts_type_name, code__in=command.codes,
-                                                                  visible_time__lte=command.end) \
-                .order_by("visible_time").limit(command.window)
+        time_series_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+        return time_series_repo.query_ts_data(ts_type_name, command)
 
-        func = TSFunctionRegistry.find_function(ts_type_name)
-
-        for row in r.all():
-            values: Mapping[str, object] = func.deserialized(row.data)
-            visible_time = Timestamp(row.visible_time, tz='UTC').tz_convert("Asia/Shanghai")
-            ts_data = TSData(row.type, visible_time, row.code, values)
-            data_list.append(ts_data)
-        return data_list
 
 
 class Subscription(object):
@@ -344,11 +325,9 @@ class TimeSeries(object):
         logging.info("下载完成， 共下载了{}个数据".format(total_count))
 
     def save(self):
-        data_record_map = {}
-        for code in self.data_record.keys():
-            dr:DataRecord = self.data_record[code]
-            data_record_map[code] = DataRecordModel(code=dr.code, start_time=dr.start, end_time=dr.end)
-        TimeSeriesModel.create(name=self.name, data_record=data_record_map).save()
+        time_series_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+        time_series_repo.save(self)
+
 
     def current_price(self, codes: List[str]) -> Mapping[str, Price]:
         return self.func.current_price(codes)
@@ -381,25 +360,19 @@ class TSFunctionRegistry(object):
         cls.funcs[name] = func
 
 
-class TimeSeriesRepo(object):
-    @classmethod
-    def find_one(cls, name: str) -> TimeSeries:
-        ts = TimeSeries()
-        r: ModelQuerySet = TimeSeriesModel.objects(name=name)
-        if r.count() == 1:
-            model: TimeSeriesModel = r.first()
-            data_record = {}
-            for key in model.data_record.keys():
-                dr_model: DataRecordModel = model.data_record[key]
-                data_record[key] = DataRecord(dr_model.code, Timestamp(dr_model.start_time, tz='UTC'),
-                                              Timestamp(dr_model.end_time, tz='UTC'))
-            ts = TimeSeries(name=model.name, data_record=data_record)
-        elif r.count() > 1:
-            raise RuntimeError("wrong data")
+class TimeSeriesRepo(metaclass=ABCMeta):
+    @abstractmethod
+    def find_one(self, name):
+        pass
 
-        # 查找该实例的方法
-        func: TimeSeriesFunction = TSFunctionRegistry.find_function(name)
-        if not func:
-            raise RuntimeError("没有找到实例方法")
-        ts.with_func(func)
-        return ts
+    @abstractmethod
+    def save(self, ts: TimeSeries):
+        pass
+
+    @abstractmethod
+    def save_ts(self, ts_list: List[TSData]):
+        pass
+
+    @abstractmethod
+    def query_ts_data(self, ts_type_name, command):
+        pass
