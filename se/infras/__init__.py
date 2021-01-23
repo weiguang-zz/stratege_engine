@@ -12,12 +12,7 @@ from se.infras.repos import TimeSeriesRepoImpl, AccountRepoImpl
 BeanContainer.register(TimeSeriesRepo, TimeSeriesRepoImpl())
 BeanContainer.register(AccountRepo, AccountRepoImpl())
 
-# 初始化配置
-config_file_name = 'config.ini'
-if not os.path.exists(config_file_name):
-    raise RuntimeError("需要配置文件config.ini")
-config = ConfigParser()
-config.read(config_file_name)
+from se.domain2 import config
 
 # 初始化DB连接
 connection.setup(config.get("cassandra", "contact_points").split(","),

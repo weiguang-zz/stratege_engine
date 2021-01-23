@@ -21,6 +21,7 @@ from pandas import Timestamp
 
 from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MKTOrder, OrderDirection, LimitOrder, \
     DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution
+from se.domain2.domain import send_email
 from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Subscription, Asset, HistoryDataQueryCommand, \
     TSData, Price
 
@@ -142,10 +143,21 @@ class IBClient(EWrapper):
 
         # 启动ping线程，如果与服务器的连接丢失，则会尝试重新连接
         def ping():
+            retry_count = 0
             while True:
                 if cli.connState != EClient.CONNECTED or not cli.reader.is_alive():
+                    retry_count += 1
+                    if retry_count % 60 == 1:
+                        # 每隔10分钟进行邮件提醒
+                        logging.info("发送邮件通知")
+                        send_email("连接断开，将会尝试重新连接", "")
                     logging.info("尝试重新连接")
                     try_connect()
+                    if cli.connState == EClient.CONNECTED and cli.reader.is_alive():
+                        retry_count = 0
+                        logging.info("重新连接成功，发送邮件通知")
+                        send_email("重新连接成功", "")
+
                 time.sleep(10)
 
         threading.Thread(name="ib_ping", target=ping).start()

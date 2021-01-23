@@ -2,15 +2,13 @@ import logging
 import time
 from configparser import ConfigParser
 
-from pandas._libs.tslibs.timestamps import Timestamp
 from trading_calendars import get_calendar
 
-from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, AccountRepo
-from se.domain2.domain import BeanContainer
+from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection
+from se.domain2.domain import send_email
 from se.domain2.engine.engine import AbstractStrategy, Engine, Scope, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
 from se.infras.ib import IBAccount
-import pandas as pd
 
 
 class TestStrategy2(AbstractStrategy):
@@ -32,6 +30,8 @@ class TestStrategy2(AbstractStrategy):
                                  place_time=event.visible_time)
                 account.place_order(order)
                 logging.info("开盘平仓, 订单:{}".format(order.__dict__))
+                msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
+                send_email("【订单】开盘平仓", str(msg))
         # 记录当天的开盘价
         code = self.scope.codes[0]
         # 等待直到获取到最新的股票价格
@@ -59,6 +59,8 @@ class TestStrategy2(AbstractStrategy):
             account.place_order(order)
             logging.info("当天价格上升，下单买入, 开盘价：{}, 收盘价:{}, 订单：{}".
                          format(self.open_price, cp[code].price, order.__dict__))
+            msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
+            send_email("【订单】收盘买入", str(msg))
         else:
             logging.info("当天价格下跌，不开仓 开盘价:{}, 收盘价:{}".format(self.open_price, cp[code].price))
 
@@ -68,6 +70,9 @@ class TestStrategy2(AbstractStrategy):
     def order_status_change(self, order, account):
         logging.info("订单状态变更, 订单状态:{}，账户持仓:{}, 账户现金:{}".
                      format(order.__dict__, account.positions, account.cash))
+        msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
+        send_email("【订单】成交", str(msg))
+
 
 
 engine = Engine()

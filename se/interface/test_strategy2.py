@@ -6,11 +6,10 @@ from pandas._libs.tslibs.timestamps import Timestamp
 from trading_calendars import get_calendar
 
 from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, AccountRepo
-from se.domain2.domain import BeanContainer
+from se.domain2.domain import send_email, BeanContainer
 from se.domain2.engine.engine import AbstractStrategy, Engine, Scope, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
 from se.infras.ib import IBAccount
-import pandas as pd
 
 
 class TestStrategy2(AbstractStrategy):
@@ -32,6 +31,8 @@ class TestStrategy2(AbstractStrategy):
                                  place_time=event.visible_time)
                 account.place_order(order)
                 logging.info("开盘平仓, 订单:{}".format(order.__dict__))
+                msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
+                send_email("【订单】开盘平仓", str(msg))
         # 记录当天的开盘价
         code = self.scope.codes[0]
         # 等待直到获取到最新的股票价格
@@ -59,6 +60,8 @@ class TestStrategy2(AbstractStrategy):
             account.place_order(order)
             logging.info("当天价格上升，下单买入, 开盘价：{}, 收盘价:{}, 订单：{}".
                          format(self.open_price, cp[code].price, order.__dict__))
+            msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
+            send_email("【订单】收盘买入", str(msg))
         else:
             logging.info("当天价格下跌，不开仓 开盘价:{}, 收盘价:{}".format(self.open_price, cp[code].price))
 
@@ -68,6 +71,9 @@ class TestStrategy2(AbstractStrategy):
     def order_status_change(self, order, account):
         logging.info("订单状态变更, 订单状态:{}，账户持仓:{}, 账户现金:{}".
                      format(order.__dict__, account.positions, account.cash))
+        msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
+        send_email("【订单】成交", str(msg))
+
 
 
 engine = Engine()
@@ -88,40 +94,40 @@ config.read(config_file_name)
 # 实盘测试
 # acc = IBAccount("ib_test1", 10000)
 
-# acc_repo: AccountRepo = BeanContainer.getBean(AccountRepo)
-# acc = acc_repo.find_one("ib_test1")
+acc_repo: AccountRepo = BeanContainer.getBean(AccountRepo)
+acc = acc_repo.find_one("ib_test1")
 #
-# acc.with_order_callback(strategy).with_client(config.get('ib', 'host'), config.getint('ib', 'port'),
-#                                               config.getint('ib', 'client_id'))
-#
-#
-# def mocked_event_generator(event_definition: EventDefinition):
-#     if isinstance(event_definition.time_rule, MarketOpen):
-#         t = Timestamp("2021-01-21 22:30:00", tz='Asia/Shanghai')
-#         return [Event(event_definition, visible_time=t, data={})]
-#
-#     elif isinstance(event_definition.time_rule, MarketClose):
-#         if event_definition.time_rule.offset == 0:
-#             t = Timestamp("2021-01-22 05:00:00", tz='Asia/Shanghai')
-#             return [Event(event_definition, visible_time=t, data={})]
-#         elif event_definition.time_rule.offset == 30:
-#             t = Timestamp("2021-01-22 05:30:00", tz='Asia/Shanghai')
-#             return [Event(event_definition, visible_time=t, data={})]
-#
-#
-# mocked_current_prices = {
-#     Timestamp("2021-01-21 22:30:00", tz='Asia/Shanghai'): {"SPCE_STK_USD_SMART": 30},
-#     Timestamp("2021-01-22 05:00:00", tz='Asia/Shanghai'): {"SPCE_STK_USD_SMART": 31},
-#     Timestamp("2021-01-22 05:30:00", tz='Asia/Shanghai'): {"SPCE_STK_USD_SMART": 31},
-#
-# }
-#
-# engine.run(strategy, acc, is_realtime_test=True, mocked_events_generator=mocked_event_generator,
-#            mocked_current_prices=mocked_current_prices)
+acc.with_order_callback(strategy).with_client(config.get('ib', 'host'), config.getint('ib', 'port'),
+                                              config.getint('ib', 'client_id'))
+
+
+def mocked_event_generator(event_definition: EventDefinition):
+    if isinstance(event_definition.time_rule, MarketOpen):
+        t = Timestamp("2021-01-21 22:30:00", tz='Asia/Shanghai')
+        return [Event(event_definition, visible_time=t, data={})]
+
+    elif isinstance(event_definition.time_rule, MarketClose):
+        if event_definition.time_rule.offset == 0:
+            t = Timestamp("2021-01-22 05:00:00", tz='Asia/Shanghai')
+            return [Event(event_definition, visible_time=t, data={})]
+        elif event_definition.time_rule.offset == 30:
+            t = Timestamp("2021-01-22 05:30:00", tz='Asia/Shanghai')
+            return [Event(event_definition, visible_time=t, data={})]
+
+
+mocked_current_prices = {
+    Timestamp("2021-01-21 22:30:00", tz='Asia/Shanghai'): {"SPCE_STK_USD_SMART": 30},
+    Timestamp("2021-01-22 05:00:00", tz='Asia/Shanghai'): {"SPCE_STK_USD_SMART": 31},
+    Timestamp("2021-01-22 05:30:00", tz='Asia/Shanghai'): {"SPCE_STK_USD_SMART": 31},
+
+}
+
+engine.run(strategy, acc, is_realtime_test=True, mocked_events_generator=mocked_event_generator,
+           mocked_current_prices=mocked_current_prices)
 
 # 实盘
 
-acc = IBAccount("ib_real1", 10000)
-acc.with_order_callback(strategy).with_client(config.get('ib', 'host'), config.getint('ib', 'port'),
-                                              config.getint('ib', 'client_id'))
-engine.run(strategy, acc)
+# acc = IBAccount("ib_real1", 10000)
+# acc.with_order_callback(strategy).with_client(config.get('ib', 'host'), config.getint('ib', 'port'),
+#                                               config.getint('ib', 'client_id'))
+# engine.run(strategy, acc)
