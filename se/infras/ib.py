@@ -150,13 +150,17 @@ class IBClient(EWrapper):
                     if retry_count % 60 == 1:
                         # 每隔10分钟进行邮件提醒
                         logging.info("发送邮件通知")
-                        send_email("连接断开，将会尝试重新连接", "")
+                        send_email("连接断开，将会尝试重新连接",
+                                   "client 信息: host:{}, port:{}, client_id:{}".
+                                   format(self.cli.host, self.cli.port, self.cli.clientId))
                     logging.info("尝试重新连接")
                     try_connect()
                     if cli.connState == EClient.CONNECTED and cli.reader.is_alive():
                         retry_count = 0
                         logging.info("重新连接成功，发送邮件通知")
-                        send_email("重新连接成功", "")
+                        send_email("重新连接成功",
+                                   "client 信息: host:{}, port:{}, client_id:{}".
+                                   format(self.cli.host, self.cli.port, self.cli.clientId))
 
                 time.sleep(10)
 
