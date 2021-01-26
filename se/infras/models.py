@@ -7,8 +7,14 @@ from cassandra.cqlengine.usertype import UserType
 class UserOrderExecutionModel(UserType):
     __type_name__ = "user_order_execution"
     id = columns.Text(required=True)
-    commission = columns.Float(required=True)
-    origin = columns.Text(required=True)
+    version = columns.Integer(required=True)
+    commission = columns.Text(required=True)
+    direction = columns.Text(required=True)
+    filled_quantity = columns.Float()
+    filled_avg_price = columns.Float()
+    filled_start_time = columns.DateTime()
+    filled_end_time = columns.DateTime()
+    attributes = columns.Map(key_type=columns.Text, value_type=columns.Text)
 
 
 class UserOrderModel(UserType):
@@ -31,15 +37,6 @@ class UserOrderModel(UserType):
     execution_map = columns.Map(key_type=columns.Text, value_type=UserDefinedType(UserOrderExecutionModel), default={})
 
 
-class OperationModel(UserType):
-    __type_name__ = "operation"
-    start_time = columns.DateTime()
-    end_time = columns.DateTime()
-    pnl = columns.Float()
-    start_cash = columns.Float()
-    orders = columns.List(value_type=UserDefinedType(UserOrderModel), default=[])
-
-
 class AccountModel(Model):
     __table_name__ = "account"
     tp = columns.Text(required=True)
@@ -48,8 +45,7 @@ class AccountModel(Model):
     initial_cash = columns.Float(required=True)
     positions = columns.Map(key_type=columns.Text, value_type=columns.Float, default={})
     history_net_value = columns.Map(key_type=columns.DateTime(), value_type=columns.Float(), default={})
-    current_operation = UserDefinedType(OperationModel)
-    history_operations = columns.List(value_type=UserDefinedType(OperationModel))
+    orders = columns.List(value_type=UserDefinedType(UserOrderModel))
 
 
 class DataRecordModel(UserType):

@@ -4,9 +4,9 @@ from configparser import ConfigParser
 
 from trading_calendars import get_calendar
 
-from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection
+from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder
 from se.domain2.domain import send_email
-from se.domain2.engine.engine import AbstractStrategy, Engine, Scope, EventDefinition, EventDefinitionType, MarketOpen, \
+from se.domain2.engine.engine import AbstractStrategy, Engine, Scope, EventDefinition, EventDefinitionType, MarketOpen,\
     MarketClose, Event, DataPortal
 from se.infras.ib import IBAccount
 
@@ -19,9 +19,14 @@ class TestStrategy2(AbstractStrategy):
 
     def initialize(self, engine: Engine):
         market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen())
-        market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
+        if engine.is_backtest:
+            market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
+        else:
+            # 实盘的时候，在收盘前5s的时候提交订单
+            market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-5))
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
+        self.open_price = None
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         if len(account.positions) > 0:
@@ -55,7 +60,8 @@ class TestStrategy2(AbstractStrategy):
         cp = data_portal.current_price([code], event.visible_time)
         if cp[code].price > self.open_price:
             buy_quantity = int(account.cash / cp[code].price)
-            order = MKTOrder(code, direction=OrderDirection.BUY, quantity=buy_quantity, place_time=event.visible_time)
+            order = LimitOrder(code, direction=OrderDirection.BUY, quantity=buy_quantity, place_time=event.visible_time,
+                               limit_price=cp[code].price)
             account.place_order(order)
             logging.info("当天价格上升，下单买入, 开盘价：{}, 收盘价:{}, 订单：{}".
                          format(self.open_price, cp[code].price, order.__dict__))
@@ -72,7 +78,6 @@ class TestStrategy2(AbstractStrategy):
                      format(order.__dict__, account.positions, account.cash))
         msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
         send_email("【订单】成交", str(msg))
-
 
 
 engine = Engine()

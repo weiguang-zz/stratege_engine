@@ -1,4 +1,6 @@
+from __future__ import annotations
 import logging
+import uuid
 from abc import *
 from enum import Enum
 from typing import *
@@ -49,19 +51,28 @@ class Tick(object):
         self.size = size
 
 
-class MatchResult(object):
-    def __init__(self, filled_price, filled_quantity, filled_start_time, filled_end_time):
-        self.filled_price = filled_price
+class OrderExecution(object):
+    def __init__(self, id: str, version: int, commission: float, filled_quantity: float, filled_avg_price: float,
+                 filled_start_time: Timestamp, filled_end_time: Timestamp, direction: OrderDirection,
+                 attributes: Dict[str, str] = None):
+        self.id = id
+        self.version = version
+        self.commission = commission
         self.filled_quantity = filled_quantity
+        self.filled_avg_price = filled_avg_price
         self.filled_start_time = filled_start_time
         self.filled_end_time = filled_end_time
+        self.direction = direction
+        self.attributes = attributes
 
-
-class OrderExecution(object):
-    def __init__(self, id: str, commission: float, origin: str):
-        self.id = id
-        self.commission = commission
-        self.origin = origin
+    def cash_change(self):
+        cash_change = 0
+        cash_change -= self.commission
+        if self.direction == OrderDirection.BUY:
+            cash_change = cash_change - self.filled_quantity * self.filled_avg_price
+        else:
+            cash_change = cash_change + self.filled_quantity * self.filled_avg_price
+        return cash_change
 
 
 class Order(metaclass=ABCMeta):
@@ -80,36 +91,74 @@ class Order(metaclass=ABCMeta):
         self.execution_map = {}
 
     @abstractmethod
-    def bar_match(self, bar: Bar) -> MatchResult:
+    def bar_match(self, bar: Bar) -> OrderExecution:
         pass
 
     @abstractmethod
-    def tick_match(self, tick: Tick) -> MatchResult:
+    def tick_match(self, tick: Tick) -> OrderExecution:
         pass
 
-    def order_filled(self, filled_quantity, filled_price, filled_start_time, filled_end_time):
-        if self.status == OrderStatus.FILLED or self.status == OrderStatus.CANCELED:
-            raise RuntimeError("wrong order status")
-        self.filled_quantity += filled_quantity
-        if self.filled_quantity != self.quantity:
-            raise RuntimeError(" wrong filled quantity")
-        self.filled_start_time = filled_start_time
-        self.filled_end_time = filled_end_time
-        self.filled_avg_price = filled_price
-        self.status = OrderStatus.FILLED
-        logging.info("订单成交:{}".format(self.__dict__))
+    def order_filled(self, execution: OrderExecution):
+        if execution.id in self.execution_map:
+            old_execution: OrderExecution = self.execution_map[execution.id]
+            if execution.version > old_execution.version:
+                self.reverse(old_execution)
+                self._order_filled(execution)
+        else:
+            self._order_filled(execution)
 
-    def order_filled_realtime(self, remaining: float, filled_avg_price: float):
-        if remaining <= 0:
-            self.status = OrderStatus.FILLED
-            self.filled_end_time = Timestamp.now(tz='Asia/Shanghai')
+    def _order_filled(self, execution: OrderExecution):
         if not self.filled_start_time:
-            self.filled_start_time = Timestamp.now(tz='Asia/shanghai')
-        self.filled_quantity = self.quantity - remaining
-        self.filled_avg_price = filled_avg_price
+            self.filled_start_time = execution.filled_start_time
 
-    def add_execution(self, oe: OrderExecution):
-        self.execution_map[oe.id] = oe
+        self.filled_avg_price = (execution.filled_avg_price * execution.filled_quantity +
+                                 self.filled_quantity * self.filled_avg_price) / \
+                                (self.filled_quantity + execution.filled_quantity)
+        self.filled_quantity += execution.filled_quantity
+        if self.filled_quantity > self.quantity:
+            raise RuntimeError("wrong filled quantity")
+        if self.filled_quantity == self.quantity:
+            self.filled_end_time = execution.filled_end_time
+            self.status = OrderStatus.FILLED
+        self.fee += execution.commission
+
+    def reverse(self, execution: OrderExecution):
+        self.filled_avg_price = (self.quantity * self.filled_avg_price -
+                                 execution.filled_quantity * execution.filled_avg_price) / \
+                                (self.quantity - execution.filled_quantity)
+        self.filled_quantity = self.filled_quantity - execution.filled_quantity
+        if self.quantity == 0:
+            self.filled_start_time = None
+            self.filled_end_time = None
+
+        if self.filled_quantity < self.quantity:
+            self.status = OrderStatus.CREATED
+        self.fee = self.fee - execution.commission
+
+    # def order_filled(self, filled_quantity, filled_price, filled_start_time, filled_end_time):
+    #     if self.status == OrderStatus.FILLED or self.status == OrderStatus.CANCELED:
+    #         raise RuntimeError("wrong order status")
+    #     self.filled_quantity += filled_quantity
+    #     if self.filled_quantity != self.quantity:
+    #         raise RuntimeError(" wrong filled quantity")
+    #     self.filled_start_time = filled_start_time
+    #     self.filled_end_time = filled_end_time
+    #     self.filled_avg_price = filled_price
+    #     self.status = OrderStatus.FILLED
+    #     logging.info("订单成交:{}".format(self.__dict__))
+    #
+    # def order_filled_realtime(self, this_filled: float, this_filled_avg_price: float):
+    #     self.filled_avg_price = (this_filled * this_filled_avg_price + self.filled_quantity * self.filled_avg_price) \
+    #                             / (this_filled + self.filled_quantity)
+    #     self.filled_quantity += this_filled
+    #     if self.filled_quantity > self.quantity:
+    #         raise RuntimeError("wrong filled quantity")
+    #     if self.filled_quantity == self.quantity:
+    #         self.status = OrderStatus.FILLED
+    #         self.filled_end_time = Timestamp.now(tz='Asia/Shanghai')
+    #
+    #     if not self.filled_start_time:
+    #         self.filled_start_time = Timestamp.now(tz='Asia/shanghai')
 
     def cancel(self):
         self.status = OrderStatus.CANCELED
@@ -117,21 +166,32 @@ class Order(metaclass=ABCMeta):
     def remaining(self):
         return self.quantity - self.filled_quantity
 
-    def net_value(self):
-        # 该订单对现金的影响
-        v = self.filled_avg_price * self.filled_quantity
-        if self.direction == OrderDirection.SELL:
-            v = -v
-        return v
+    def __lt__(self, other: Order):
+        # 根据filled_start_time进行排序，没有的话，则根据place_time进行排序
+        if self.filled_start_time and other.filled_start_time:
+            return self.filled_start_time < other.filled_start_time
+        else:
+            return self.place_time < other.place_time
+
+    def cash_change(self):
+        cash_change = 0
+        cash_change -= self.fee
+        if self.direction == OrderDirection.BUY:
+            cash_change = cash_change - self.filled_quantity * self.filled_avg_price
+        else:
+            cash_change = cash_change + self.filled_quantity * self.filled_avg_price
+        return cash_change
 
 
 class MKTOrder(Order):
-    def bar_match(self, bar: Bar) -> MatchResult:
+    def bar_match(self, bar: Bar) -> OrderExecution:
         # 以开盘价成交
-        return MatchResult(bar.open_price, self.quantity, bar.start_time, bar.visible_time)
+        return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, bar.open_price, bar.start_time,
+                              bar.visible_time, self.direction)
 
-    def tick_match(self, tick: Tick) -> MatchResult:
-        return MatchResult(tick.price, self.quantity, tick.visible_time, tick.visible_time)
+    def tick_match(self, tick: Tick) -> OrderExecution:
+        return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, tick.price,
+                              tick.visible_time, tick.visible_time, self.direction)
 
     def __init__(self, code, direction, quantity, place_time):
         super().__init__(code, direction, quantity, place_time)
@@ -145,14 +205,17 @@ class DelayMKTOrder(Order):
 
     def bar_match(self, bar: Bar):
         if bar.start_time >= (self.place_time + self.delay_time):
-            return MatchResult(bar.open_price, self.quantity, bar.start_time, bar.visible_time)
+            return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, bar.open_price, bar.start_time,
+                                  bar.visible_time, self.direction)
         elif bar.visible_time >= (self.place_time + self.delay_time):
-            return MatchResult(bar.close_price, self.quantity, bar.start_time, bar.visible_time)
+            return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, bar.close_price, bar.start_time,
+                                  bar.visible_time, self.direction)
         return None
 
     def tick_match(self, tick: Tick):
         if tick.visible_time >= (self.place_time + self.delay_time):
-            return MatchResult(tick.price, self.quantity, tick.visible_time, tick.visible_time)
+            return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, tick.price,
+                                  tick.visible_time, tick.visible_time, self.direction)
         return None
 
 
@@ -165,19 +228,23 @@ class LimitOrder(Order):
     def bar_match(self, bar: Bar):
         if self.direction == OrderDirection.BUY:
             if bar.low_price <= self.limit_price:
-                return MatchResult(self.limit_price, self.quantity, bar.start_time, bar.visible_time)
+                return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, self.limit_price, bar.start_time,
+                                      bar.visible_time, self.direction)
         else:
             if bar.high_price >= self.limit_price:
-                return MatchResult(self.limit_price, self.quantity, bar.start_time, bar.visible_time)
+                return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, self.limit_price, bar.start_time,
+                                      bar.visible_time, self.direction)
         return None
 
     def tick_match(self, tick: Tick):
         if self.direction == OrderDirection.BUY:
             if tick.price <= self.limit_price:
-                return MatchResult(self.limit_price, self.quantity, tick.visible_time, tick.visible_time)
+                return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, self.limit_price,
+                                      tick.visible_time, tick.visible_time, self.direction)
         else:
             if tick.price >= self.limit_price:
-                return MatchResult(self.limit_price, self.quantity, tick.visible_time, tick.visible_time)
+                return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, self.limit_price,
+                                      tick.visible_time, tick.visible_time, self.direction)
         return None
 
 
@@ -191,19 +258,25 @@ class CrossMKTOrder(Order):
     def bar_match(self, bar: Bar):
         if self.cross_direction == CrossDirection.UP:
             if bar.high_price >= self.cross_price:
-                return MatchResult(self.cross_price, self.quantity, bar.start_time, bar.visible_time)
+                return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, self.cross_price, bar.start_time,
+                                      bar.visible_time, self.direction)
+
         else:
             if bar.low_price <= self.cross_price:
-                return MatchResult(self.cross_price, self.quantity, bar.start_time, bar.visible_time)
+                return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, self.cross_price, bar.start_time,
+                                      bar.visible_time, self.direction)
+
         return None
 
     def tick_match(self, tick: Tick):
         if self.cross_direction == CrossDirection.UP:
             if tick.price >= self.cross_price:
-                return MatchResult(self.cross_price, self.quantity, tick.visible_time, tick.visible_time)
+                return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, self.cross_price, tick.visible_time,
+                                      tick.visible_time, self.direction)
         else:
             if tick.price <= self.cross_price:
-                return MatchResult(self.cross_price, self.quantity, tick.visible_time, tick.visible_time)
+                return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, self.cross_price, tick.visible_time,
+                                      tick.visible_time, self.direction)
         return None
 
 
@@ -226,13 +299,6 @@ class Operation(object):
         if len(self.orders) <= 0:
             self.start_time = order.place_time
         self.orders.append(order)
-
-    def get_open_orders(self):
-        open_orders = []
-        for o in self.orders:
-            if o.status == OrderStatus.CREATED:
-                open_orders.append(o)
-        return open_orders
 
     def calc_pnl(self):
         pnl = 0
@@ -259,8 +325,9 @@ class AbstractAccount(metaclass=ABCMeta):
         self.initial_cash = initial_cash
         self.positions = {}
         self.history_net_value: Mapping[Timestamp, float] = {}
-        self.current_operation: Operation = Operation(initial_cash)
-        self.history_operations: List[Operation] = []
+        self.orders: List[Order] = []
+        # self.current_operation: Operation = Operation(initial_cash)
+        # self.history_operations: List[Operation] = []
 
     def with_order_callback(self, order_callback: OrderCallback):
         self.order_callback = order_callback
@@ -271,7 +338,11 @@ class AbstractAccount(metaclass=ABCMeta):
         pass
 
     def get_open_orders(self):
-        return self.current_operation.get_open_orders()
+        ods = []
+        for order in self.orders:
+            if order.status == OrderStatus.CREATED:
+                ods.append(order)
+        return ods
 
     @abstractmethod
     def match(self, data):
@@ -289,9 +360,84 @@ class AbstractAccount(metaclass=ABCMeta):
         self.history_net_value[current_time] = net_value
 
     def cancel_all_open_orders(self):
-        for open_order in self.current_operation.get_open_orders():
+        for open_order in self.get_open_orders():
             open_order.cancel()
             self.order_callback.order_status_change(open_order, self)
+
+    def order_filled(self, order: Order, execution: OrderExecution):
+        if execution.id in order.execution_map:
+            old_execution = order.execution_map[execution.id]
+            if execution.version > old_execution.version:
+                self._reverse(order, old_execution)
+                self._order_filled(order, execution)
+        else:
+            self._order_filled(order, execution)
+
+    def _order_filled(self, order: Order, execution: OrderExecution):
+        # 修改账户现金
+        self.cash += execution.cash_change()
+
+        # 修改持仓
+        position_change = execution.filled_quantity
+        if order.direction == OrderDirection.SELL:
+            position_change = -position_change
+        self.update_position(order.code, position_change)
+
+        # 修改订单的状态
+        order.order_filled(execution)
+        self.order_callback.order_status_change(order, self)
+
+    def _reverse(self, order: Order, execution: OrderExecution):
+        self.cash -= execution.cash_change()
+
+        # 修改持仓
+        position_change = execution.filled_quantity
+        if order.direction == OrderDirection.BUY:
+            position_change = -position_change
+        self.update_position(order.code, position_change)
+        # 修改订单状态
+        order.reverse(execution)
+        self.order_callback.order_status_change(order, self)
+
+    def update_position(self, code, position_change):
+        if code in self.positions:
+            self.positions[code] = self.positions[code] + position_change
+        else:
+            self.positions[code] = position_change
+
+        if self.positions[code] == 0:
+            self.positions.pop(code)
+
+    def history_operations(self) -> List[Operation]:
+        filled_orders = [o for o in self.orders if o.filled_quantity > 0]
+        filled_orders = sorted(filled_orders)
+        mocked_positions = {}
+        mocked_cash = self.initial_cash
+        operations: List[Operation] = []
+        current_operation = Operation(mocked_cash)
+
+        def position_change(positions: Dict, order: Order):
+            pc = order.filled_quantity
+            if order.direction == OrderDirection.SELL:
+                pc = -pc
+            if order.code in positions:
+                positions[order.code] = positions[order.code] + pc
+            else:
+                positions[order.code] = pc
+            if positions[order.code] == 0:
+                positions.pop(order.code)
+
+        for o in filled_orders:
+            current_operation.add_order(o)
+            mocked_cash += o.cash_change()
+            position_change(mocked_positions, o)
+            if len(mocked_positions) <= 0:
+                new_operation = current_operation.end(mocked_cash)
+                operations.append(current_operation)
+                current_operation = new_operation
+
+        operations.append(current_operation)
+        return operations
 
 
 class AccountRepo(metaclass=ABCMeta):
@@ -310,43 +456,42 @@ class BacktestAccount(AbstractAccount):
         for o in open_orders:
             if o.status != OrderStatus.CREATED:
                 continue
-            match_result: MatchResult = None
+            execution: OrderExecution = None
             if isinstance(data, Bar):
-                match_result = o.bar_match(data)
+                execution = o.bar_match(data)
             elif isinstance(data, Tick):
-                match_result = o.tick_match(data)
+                execution = o.tick_match(data)
             else:
                 raise RuntimeError("wrong data")
-            if match_result:
-                # change position
-                o.order_filled(match_result.filled_quantity, match_result.filled_price,
-                               match_result.filled_start_time, match_result.filled_end_time)
+            if execution:
+                # change order status
+                self.order_filled(o, execution)
 
-                # 修改账户现金
-                if o.direction == OrderDirection.SELL:
-                    self.cash += match_result.filled_quantity * match_result.filled_price
-                else:
-                    self.cash -= match_result.filled_quantity * match_result.filled_price
+                # # 修改账户现金
+                # if o.direction == OrderDirection.SELL:
+                #     self.cash += execution.filled_quantity * execution.filled_price
+                # else:
+                #     self.cash -= execution.filled_quantity * execution.filled_price
+                #
+                # # 修改持仓
+                # quantity_change = execution.filled_quantity
+                # if o.direction == OrderDirection.SELL:
+                #     quantity_change = -quantity_change
+                # if o.code in self.positions:
+                #     self.positions[o.code] += quantity_change
+                # else:
+                #     self.positions[o.code] = quantity_change
+                #
+                # if self.positions[o.code] == 0:
+                #     self.positions.pop(o.code)
 
-                # 修改持仓
-                quantity_change = match_result.filled_quantity
-                if o.direction == OrderDirection.SELL:
-                    quantity_change = -quantity_change
-                if o.code in self.positions:
-                    self.positions[o.code] += quantity_change
-                else:
-                    self.positions[o.code] = quantity_change
-
-                if self.positions[o.code] == 0:
-                    self.positions.pop(o.code)
-
-                if len(self.positions) <= 0:
-                    next_operation = self.current_operation.end(self.cash)
-                    self.history_operations.append(self.current_operation)
-                    self.current_operation = next_operation
+                # if len(self.positions) <= 0:
+                #     next_operation = self.current_operation.end(self.cash)
+                #     self.history_operations.append(self.current_operation)
+                #     self.current_operation = next_operation
 
                 self.order_callback.order_status_change(o, self)
 
     def place_order(self, order: Order):
         logging.info("下单：{}".format(str(order.__dict__)))
-        self.current_operation.add_order(order)
+        self.orders.append(order)

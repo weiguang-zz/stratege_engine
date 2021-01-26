@@ -7,7 +7,6 @@ ks_name = config.get("cassandra", "session_keyspace")
 
 sync_type(ks_name, UserOrderExecutionModel)
 sync_type(ks_name, UserOrderModel)
-sync_type(ks_name, OperationModel)
 sync_type(ks_name, DataRecordModel)
 sync_table(AccountModel)
 sync_table(TimeSeriesModel)

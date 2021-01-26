@@ -428,7 +428,7 @@ class Engine(EventSubscriber):
         ep = EventProducer(self.event_definitions)
         event_line.add_all(ep.history_events(strategy.scope, start, end))
 
-        account = BacktestAccount(account_name, initial_cash, strategy)
+        account = BacktestAccount(account_name, initial_cash).with_order_callback(strategy)
         event: Event = event_line.pop_event()
         while event is not None:
             callback = self.callback_for(event.event_definition)

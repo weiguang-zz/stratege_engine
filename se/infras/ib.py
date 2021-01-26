@@ -12,7 +12,7 @@ from ibapi.client import EClient
 from ibapi.commission_report import CommissionReport
 from ibapi.common import BarData, HistoricalTickLast, ListOfHistoricalTickLast, OrderId
 from ibapi.contract import Contract, ContractDetails
-from ibapi.execution import Execution
+from ibapi.execution import Execution, ExecutionFilter
 from ibapi.order import Order as IBOrder
 from ibapi.order_condition import OrderCondition, PriceCondition
 from ibapi.wrapper import EWrapper
@@ -20,7 +20,7 @@ from pandas import Timedelta
 from pandas import Timestamp
 
 from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MKTOrder, OrderDirection, LimitOrder, \
-    DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution
+    DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution, Operation, OrderStatus
 from se.domain2.domain import send_email
 from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Subscription, Asset, HistoryDataQueryCommand, \
     TSData, Price
@@ -66,7 +66,6 @@ class IBClient(EWrapper):
         super().commissionReport(commissionReport)
         if self.subscriber:
             self.subscriber.commissionReport(commissionReport)
-
 
     def orderStatus(self, orderId: OrderId, status: str, filled: float, remaining: float, avgFillPrice: float,
                     permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
@@ -166,7 +165,6 @@ class IBClient(EWrapper):
                 time.sleep(10)
 
         threading.Thread(name="ib_ping", target=ping).start()
-
 
     def _req_history_data(self, code: str, end_date_time: Timestamp, duration_str, bar_size, what_to_show,
                           use_rth: int, format_date: int, keep_up_to_date, char_options) -> List[BarData]:
@@ -311,6 +309,7 @@ class IBAccount(AbstractAccount, EWrapper):
     def execDetails(self, reqId: int, contract: Contract, execution: Execution):
         if execution.orderId not in self.ib_order_id_to_order:
             logging.info("该订单不是由该策略产生的订单，将会忽略, orderId:{}".format(execution.orderId))
+            return
         if execution.execId not in self.execution_map:
             self.execution_map[execution.execId] = execution
             self._save_execution_if_needed(execution.execId)
@@ -319,10 +318,18 @@ class IBAccount(AbstractAccount, EWrapper):
 
     def _save_execution_if_needed(self, exec_id: str):
         if exec_id in self.execution_map and exec_id in self.commission_map:
-            self.cash -= self.commission_map[exec_id].commission
-            order = self.ib_order_id_to_order[self.execution_map[exec_id].orderId]
-            order.add_execution(OrderExecution(exec_id, self.commission_map[exec_id].commission,
-                                               str(self.execution_map[exec_id])))
+            execution = self.execution_map[exec_id]
+            commission: CommissionReport = self.commission_map[exec_id]
+            order = self.ib_order_id_to_order[execution.orderId]
+            idx = exec_id.rindex('.')
+            real_exec_id = exec_id[:idx]
+            version = exec_id[idx+1:]
+            # 佣金等与佣金减去返佣
+            the_commisson = commission.commission
+            order_execution = OrderExecution(real_exec_id, int(version), the_commisson, execution.shares, execution.avgPrice,
+                                Timestamp(execution.time, tz='Asia/Shanghai'),
+                                Timestamp(execution.time, tz='Asia/Shanghai'), order.direction)
+            self.order_filled(order, order_execution)
 
     def execDetailsEnd(self, reqId: int):
         pass
@@ -336,51 +343,49 @@ class IBAccount(AbstractAccount, EWrapper):
 
     def orderStatus(self, orderId: OrderId, status: str, filled: float, remaining: float, avgFillPrice: float,
                     permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
-        if orderId not in self.ib_order_id_to_order:
-            logging.warning("该订单不是由该策略产生的订单，将会忽略, orderId:{}".format(orderId))
-            return
-
-        order: Order = self.ib_order_id_to_order[orderId]
-        if order.remaining() < remaining:
-            raise RuntimeError("非法的成交")
-        real_filled = 0
-        if order.remaining() > remaining:
-            real_filled = order.remaining() - remaining
-        if real_filled == 0:
-            logging.warning("没有真的成交，将会忽略")
-            return
-
-        # 修改现金
-        net_value_before = self.cash + order.net_value()
-        order.order_filled_realtime(remaining, avgFillPrice)
-        new_cash = net_value_before - order.net_value()
-        self.cash = new_cash
-
-        if order.direction == OrderDirection.SELL:
-            real_filled = -real_filled
-
-        if order.code not in self.positions:
-            self.positions[order.code] = real_filled
-        else:
-            self.positions[order.code] += real_filled
-        if self.positions[order.code] <= 0:
-            self.positions.pop(order.code)
-
-        if len(self.positions) <= 0:
-            next_operation = self.current_operation.end(self.cash)
-            self.history_operations.append(self.current_operation)
-            self.current_operation = next_operation
-
-        self.order_callback.order_status_change(order, self)
-        # 订单成交之后，保存当前账户状态
-        if remaining <= 0:
-            self.save()
-
-    def order_status_change(self, order, account):
-        self.order_callback.order_status_change(order, account)
+        pass
+        # if orderId not in self.ib_order_id_to_order:
+        #     logging.warning("该订单不是由该策略产生的订单，将会忽略, orderId:{}".format(orderId))
+        #     return
+        #
+        # order: Order = self.ib_order_id_to_order[orderId]
+        # if order.remaining() < remaining:
+        #     raise RuntimeError("非法的成交")
+        # real_filled = 0
+        # if order.remaining() > remaining:
+        #     real_filled = order.remaining() - remaining
+        # if real_filled == 0:
+        #     logging.warning("没有真的成交，将会忽略")
+        #     return
+        #
+        # # 修改现金
+        # net_value_before = self.cash + order.net_value()
+        # order.order_filled_realtime(remaining, avgFillPrice)
+        # new_cash = net_value_before - order.net_value()
+        # self.cash = new_cash
+        #
+        # if order.direction == OrderDirection.SELL:
+        #     real_filled = -real_filled
+        #
+        # if order.code not in self.positions:
+        #     self.positions[order.code] = real_filled
+        # else:
+        #     self.positions[order.code] += real_filled
+        # if self.positions[order.code] <= 0:
+        #     self.positions.pop(order.code)
+        #
+        # if len(self.positions) <= 0:
+        #     next_operation = self.current_operation.end(self.cash)
+        #     self.history_operations.append(self.current_operation)
+        #     self.current_operation = next_operation
+        #
+        # self.order_callback.order_status_change(order, self)
+        # # 订单成交之后，保存当前账户状态
+        # if remaining <= 0:
+        #     self.save()
 
     def place_order(self, order: Order):
-        self.current_operation.add_order(order)
+        self.orders.append(order)
         ib_order_id = self.cli.next_valid_id()
         order.ib_order_id = ib_order_id
         self.ib_order_id_to_order[ib_order_id] = order
@@ -403,7 +408,18 @@ class IBAccount(AbstractAccount, EWrapper):
                 logging.info("开始保存账户数据")
                 self.save()
                 time.sleep(30 * 60)
+
+        # 启动订单同步线程，避免因为没有收到消息导致账户状态不一致
+        def sync_order_executions():
+            while True:
+                if len(self.get_open_orders()) > 0:
+                    logging.info("开始同步订单的执行详情")
+                    req = Request.new_request()
+                    self.cli.cli.reqExecutions(req.req_id, ExecutionFilter())
+                time.sleep(30)
+
         threading.Thread(name="account_save", target=save).start()
+        # threading.Thread(name="sync_order_executions", target=sync_order_executions).start()
 
     def with_client(self, host, port, client_id):
         cli: IBClient = IBClient.find_client(host, port, client_id)
@@ -417,7 +433,6 @@ class IBAccount(AbstractAccount, EWrapper):
     def change_to_ib_order(self, order: Order) -> IBOrder:
         # 市价单和限价单直接提交
         ib_order: IBOrder = IBOrder()
-        ib_order.outsideRth
         if isinstance(order, MKTOrder):
             ib_order.orderType = "MKT"
             ib_order.totalQuantity = order.quantity
@@ -427,6 +442,7 @@ class IBAccount(AbstractAccount, EWrapper):
             ib_order.totalQuantity = order.quantity
             ib_order.lmtPrice = order.limit_price
             ib_order.action = 'BUY' if order.direction == OrderDirection.BUY else 'SELL'
+            ib_order.outsideRth = True
         else:
             # 穿越单和延迟单转化为IB的条件单
             if isinstance(order, DelayMKTOrder):

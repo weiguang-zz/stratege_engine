@@ -106,9 +106,24 @@ import logging
 
 # logging.basicConfig(level=logging.INFO)
 # logging.info("哈哈")
-import logging.config
+# import logging.config
+#
+# import yaml
+#
+# logging.config.dictConfig(yaml.load(open("log_config.yaml"), Loader=yaml.SafeLoader))
+# logging.info("哈哈")
+# from pandas._libs.tslibs.timestamps import Timestamp
+# from trading_calendars import get_calendar
+#
+# from se.domain2.engine.engine import MarketClose
+#
+# market_close = MarketClose(second_offset=-5)
+# print(market_close.next_time(get_calendar("NYSE"), Timestamp("2021-01-26 04:59:56", tz='Asia/Shanghai')).tz_convert("Asia/Shanghai"))
+from se.domain2.account.account import AccountRepo, AbstractAccount
+from se.domain2.domain import BeanContainer
+import se.infras
 
-import yaml
+repo:AccountRepo = BeanContainer.getBean(AccountRepo)
+acc: AbstractAccount = repo.find_one("test25")
+operations = acc.history_operations()
 
-logging.config.dictConfig(yaml.load(open("log_config.yaml"), Loader=yaml.SafeLoader))
-logging.info("哈哈")

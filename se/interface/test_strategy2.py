@@ -5,10 +5,13 @@ from configparser import ConfigParser
 from pandas._libs.tslibs.timestamps import Timestamp
 from trading_calendars import get_calendar
 
-from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, AccountRepo
+from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, AccountRepo, LimitOrder
 from se.domain2.domain import send_email, BeanContainer
 from se.domain2.engine.engine import AbstractStrategy, Engine, Scope, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
+import se.infras
+from se.infras.ib import IBAccount
+import pandas as pd
 
 
 class TestStrategy2(AbstractStrategy):
@@ -26,6 +29,7 @@ class TestStrategy2(AbstractStrategy):
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-5))
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
+        self.open_price = None
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         if len(account.positions) > 0:
@@ -59,7 +63,8 @@ class TestStrategy2(AbstractStrategy):
         cp = data_portal.current_price([code], event.visible_time)
         if cp[code].price > self.open_price:
             buy_quantity = int(account.cash / cp[code].price)
-            order = MKTOrder(code, direction=OrderDirection.BUY, quantity=buy_quantity, place_time=event.visible_time)
+            order = LimitOrder(code, direction=OrderDirection.BUY, quantity=buy_quantity, place_time=event.visible_time,
+                               limit_price=37)
             account.place_order(order)
             logging.info("当天价格上升，下单买入, 开盘价：{}, 收盘价:{}, 订单：{}".
                          format(self.open_price, cp[code].price, order.__dict__))
@@ -91,14 +96,14 @@ config.read(config_file_name)
 # 回测
 # start = pd.Timestamp("2020-01-01", tz='Asia/Shanghai')
 # end = pd.Timestamp("2020-12-01", tz='Asia/Shanghai')
-# result = engine.run_backtest(strategy, start, end, 10000, "test22")
+# result = engine.run_backtest(strategy, start, end, 10000, "test26")
 # print("done")
 
 # 实盘测试
-# acc = IBAccount("ib_test1", 10000)
+acc = IBAccount("ib_test1", 10000)
 
-acc_repo: AccountRepo = BeanContainer.getBean(AccountRepo)
-acc = acc_repo.find_one("ib_test1")
+# acc_repo: AccountRepo = BeanContainer.getBean(AccountRepo)
+# acc = acc_repo.find_one("ib_test1")
 #
 acc.with_order_callback(strategy).with_client(config.get('ib', 'host'), config.getint('ib', 'port'),
                                               config.getint('ib', 'client_id'))
@@ -110,10 +115,10 @@ def mocked_event_generator(event_definition: EventDefinition):
         return [Event(event_definition, visible_time=t, data={})]
 
     elif isinstance(event_definition.time_rule, MarketClose):
-        if event_definition.time_rule.offset == 0:
+        if event_definition.time_rule.minute_offset == 0:
             t = Timestamp("2021-01-22 05:00:00", tz='Asia/Shanghai')
             return [Event(event_definition, visible_time=t, data={})]
-        elif event_definition.time_rule.offset == 30:
+        elif event_definition.time_rule.minute_offset == 30:
             t = Timestamp("2021-01-22 05:30:00", tz='Asia/Shanghai')
             return [Event(event_definition, visible_time=t, data={})]
 
