@@ -65,17 +65,17 @@ import numpy as np
 # profit_rate = float(len(profit_rets)) / len(rets)
 # loss_rate = float(len(loss_rets)) / len(rets)
 # profit_mean = profit_rets.mean()
-# loss_mean = loss_rets.mean()
-from pandas._libs.tslibs.timestamps import Timestamp
-
-from se.domain2.account.account import MKTOrder, OrderDirection
-from se.infras.models import AccountModel
-
-# am = AccountModel.objects(name='test14').first()
-od = OrderDirection(1)
-print(type(MKTOrder("", OrderDirection.BUY, 199, Timestamp.now())).__name__)
-
-print("done")
+# # loss_mean = loss_rets.mean()
+# from pandas._libs.tslibs.timestamps import Timestamp
+#
+# from se.domain2.account.account import MKTOrder, OrderDirection
+# from se.infras.models import AccountModel
+#
+# # am = AccountModel.objects(name='test14').first()
+# od = OrderDirection(1)
+# print(type(MKTOrder("", OrderDirection.BUY, 199, Timestamp.now())).__name__)
+#
+# print("done")
 
 # test pipeline
 # from se.domain2.pipeline.pipeline import *
@@ -88,3 +88,27 @@ print("done")
 # df = run_pipeline(pipeline)
 #
 # print("done")
+
+import ibapi.wrapper
+import logging
+# import yaml
+# import sys
+#
+# dt = yaml.load(open("log_config.yaml"), Loader=yaml.SafeLoader)
+#
+# import logging.config
+# logging.config.dictConfig(dt, )
+#
+# log = logging.getLogger("ibapi.wrapper")
+# log.info("哈哈")
+# logging.info("hahaha")
+# print("done")
+
+# logging.basicConfig(level=logging.INFO)
+# logging.info("哈哈")
+import logging.config
+
+import yaml
+
+logging.config.dictConfig(yaml.load(open("log_config.yaml"), Loader=yaml.SafeLoader))
+logging.info("哈哈")

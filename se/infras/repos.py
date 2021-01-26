@@ -101,7 +101,10 @@ class AccountRepoImpl(AccountRepo):
         return op
 
     def _to_timestamp(self, dt) -> Timestamp:
-        return Timestamp(dt, tz='Asia/Shanghai')
+        if dt:
+            return Timestamp(dt, tz='UTC').tz_convert('Asia/Shanghai')
+        else:
+            return None
 
 
 class TimeSeriesRepoImpl(TimeSeriesRepo):

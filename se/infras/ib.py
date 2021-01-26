@@ -126,6 +126,7 @@ class IBClient(EWrapper):
         super().__init__()
         cli = EClient(self)
         self.cli = cli
+        self.subscriber = None
         self._next_valid_id = None
         self.code_contract_map = {}
 
@@ -416,6 +417,7 @@ class IBAccount(AbstractAccount, EWrapper):
     def change_to_ib_order(self, order: Order) -> IBOrder:
         # 市价单和限价单直接提交
         ib_order: IBOrder = IBOrder()
+        ib_order.outsideRth
         if isinstance(order, MKTOrder):
             ib_order.orderType = "MKT"
             ib_order.totalQuantity = order.quantity

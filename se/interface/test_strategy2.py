@@ -9,7 +9,6 @@ from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection
 from se.domain2.domain import send_email, BeanContainer
 from se.domain2.engine.engine import AbstractStrategy, Engine, Scope, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
-from se.infras.ib import IBAccount
 
 
 class TestStrategy2(AbstractStrategy):
@@ -20,7 +19,11 @@ class TestStrategy2(AbstractStrategy):
 
     def initialize(self, engine: Engine):
         market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen())
-        market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
+        if engine.is_backtest:
+            market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
+        else:
+            # 实盘的时候，在收盘前5s的时候提交订单
+            market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-5))
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
 

@@ -31,35 +31,39 @@ class Rule(metaclass=ABCMeta):
     def next_time(self, calendar: TradingCalendar, current_time: Timestamp) -> Timestamp:
         pass
 
-    def __init__(self):
+    def __init__(self, minute_offset, second_offset):
         self._next_time = None
+        self.minute_offset = minute_offset
+        self.second_offset = second_offset
 
 
 class MarketOpen(Rule):
     def next_time(self, calendar: TradingCalendar, current_time: Timestamp) -> Timestamp:
-        dt = calendar.next_open(current_time) + Timedelta(minutes=self.offset)
-        if dt > current_time:
-            return dt
-        else:
-            return calendar.next_open(calendar.next_open(current_time)) + Timedelta(minutes=self.offset)
-
-    def __init__(self, offset=0):
         # 因为TradingCalendar默认的开盘时间是开盘后一分钟，所以这里做一下调整
-        super().__init__()
-        self.offset = offset - 1
+        dt = calendar.next_open(current_time) + Timedelta(minutes=self.minute_offset - 1) + \
+             Timedelta(seconds=self.second_offset)
+        # 因为经过offset调整之后，这个时间可能在当前时间之前，比如如果minute_offset=-30, 当前时间为盘前10分钟，则下一个执行时间
+        # 是下下个开盘前的10分钟
+        if dt <= current_time:
+            dt = calendar.next_open(calendar.next_open(current_time)) + Timedelta(minutes=self.minute_offset - 1) \
+                 + Timedelta(seconds=self.second_offset)
+        return dt
+
+    def __init__(self, minute_offset=0, second_offset=0):
+        super().__init__(minute_offset, second_offset)
 
 
 class MarketClose(Rule):
     def next_time(self, calendar: TradingCalendar, current_time: Timestamp) -> Timestamp:
-        dt = calendar.next_close(current_time) + Timedelta(minutes=self.offset)
-        if dt > current_time:
-            return dt
-        else:
-            return calendar.next_close(calendar.next_close(current_time)) + Timedelta(minutes=self.offset)
+        dt = calendar.next_close(current_time) + Timedelta(minutes=self.minute_offset) + \
+             Timedelta(seconds=self.second_offset)
+        if dt <= current_time:
+            dt = calendar.next_close(calendar.next_close(current_time)) + Timedelta(minutes=self.minute_offset) + \
+                 Timedelta(seconds=self.second_offset)
+        return dt
 
-    def __init__(self, offset=0):
-        super().__init__()
-        self.offset = offset
+    def __init__(self, minute_offset=0, second_offset=0):
+        super().__init__(minute_offset, second_offset)
 
 
 class Scope(object):
@@ -151,6 +155,8 @@ class EventProducer(TimeSeriesSubscriber):
             p = start
             while p <= end:
                 for ed in self.time_event_definitions:
+                    if ed.time_rule.second_offset != 0:
+                        raise RuntimeError("回测过程中的时间事件不允许秒级偏移")
                     if ed.time_rule.is_match(scope.trading_calendar, p):
                         total_events.append(Event(ed, p, {}))
 
@@ -247,47 +253,10 @@ class Event(object):
             format(ed=self.event_definition, visible_time=self.visible_time, data=self.data)
 
 
-# class EventDefinition(metaclass=ABCMeta):
-#     def __init__(self, name):
-#         self.name = name
-
-
-# class TimeEventDefinition(EventDefinition):
-#     def __init__(self, name: str, time_rule: Rule):
-#         super().__init__(name)
-#         self.time_rule = time_rule
-
-
-# class DataEventDefinition(EventDefinition):
-#     def __init__(self, name: str, ts_type_name: str,
-#                  is_bar: bool = False, bar_open_as_tick: bool = False):
-#         super().__init__(name)
-#         self.ts_type_name = ts_type_name
-#         self.is_bar = is_bar
-#         self.bar_open_as_tick = bar_open_as_tick
-
-
 class EventSubscriber(metaclass=ABCMeta):
     @abstractmethod
     def on_event(self, event: Event):
         pass
-
-
-# class EventProducer(metaclass=ABCMeta):
-#     @abstractmethod
-#     def history_events(self, scope: Scope, start: Timestamp, end: Timestamp) -> List[Event]:
-#         pass
-#
-#     def subscribe(self, subscriber: EventSubscriber):
-#         self.subscriber = subscriber
-#
-#     @abstractmethod
-#     def start(self, scope: Scope):
-#         pass
-#
-#     def __init__(self, event_definitions: List[EventDefinition]):
-#         self.event_definitions = event_definitions
-#         self.subscriber = None
 
 
 class TimeEventThread(Thread):
@@ -315,69 +284,6 @@ class TimeEventThread(Thread):
         except RuntimeError as e:
             logging.error('error', e)
 
-
-# class TimeEventProducer(EventProducer):
-#     def start(self, scope: Scope):
-#         # 启动线程来产生时间事件
-#         TimeEventThread(self.subscriber, self.event_definitions).start()
-#
-#     def history_events(self, scope: Scope, start: Timestamp, end: Timestamp):
-#         events = []
-#         delta = Timedelta(minutes=1)
-#         p = start
-#         while p <= end:
-#             for ed in self.event_definitions:
-#                 if not isinstance(ed, TimeEventDefinition):
-#                     raise RuntimeError('wrong data')
-#                 if ed.time_rule.is_match(scope.trading_calendar, p):
-#                     events.append(Event(ed.name, p, {}))
-#
-#             p += delta
-#         return events
-#
-#     def __init__(self, event_definitions: List[TimeEventDefinition]):
-#         for ed in event_definitions:
-#             if not isinstance(ed, TimeEventDefinition):
-#                 raise RuntimeError("非法的事件定义")
-#         super().__init__(event_definitions)
-#
-#
-# class DataEventProducer(EventProducer, TimeSeriesSubscriber):
-#     def on_data(self, data: TSData):
-#         ed = self.ts_type_name_to_ed[data.ts_type_name]
-#         self.subscriber.on_event(Event(name=ed.name, visible_time=data.visible_time, data=data))
-#
-#     def start(self, scope: Scope):
-#         for ed in self.event_definitions:
-#             ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ed.name)
-#             ts.subscribe(self, scope.codes)
-#
-#     def history_events(self, scope: Scope, start: Timestamp, end: Timestamp):
-#         total_events = []
-#         for ed in self.event_definitions:
-#             if not isinstance(ed, DataEventDefinition):
-#                 raise RuntimeError("wrong event definition")
-#             ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ed.ts_type_name)
-#             command = HistoryDataQueryCommand(start, end, scope.codes)
-#             df = ts.history_data(command, from_local=True)
-#             for (visible_time, code), values in df.iterrows():
-#                 data = values
-#                 if ed.is_bar:
-#                     data = Bar(code=code, start_time=values['date'], visible_time=visible_time,
-#                                open_price=values['open'], high_price=values['high'], low_price=values['low'],
-#                                close_price=values['close'], volume=values['volume'])
-#                 total_events.append(Event(ed.name, visible_time, data))
-#                 if ed.bar_open_as_tick:
-#                     total_events.append((Event(ed.name, values['date'], Tick(code=code, visible_time=values['date'],
-#                                                                              price=values['open'], size=-1))))
-#         return total_events
-#
-#     def __init__(self, event_definitions: List[DataEventDefinition]):
-#         for ed in event_definitions:
-#             if not isinstance(ed, DataEventDefinition):
-#                 raise RuntimeError("非法的事件定义")
-#         super().__init__(event_definitions)
-#         self.ts_type_name_to_ed = {ed.ts_type_name: ed for ed in event_definitions}
 
 class DataPortal(object):
 
@@ -494,12 +400,13 @@ class Engine(EventSubscriber):
     def run_backtest(self, strategy: AbstractStrategy, start: Timestamp, end: Timestamp,
                      initial_cash: float,
                      account_name: str):
+        self.is_backtest = True
         # 检查account_name是否唯一
         if not self.is_unique_account(account_name):
             raise RuntimeError("account name重复")
         data_portal = DataPortal(True)
         strategy.initialize(self)
-        self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(offset=30)),
+        self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(minute_offset=30)),
                             calc_net_value)
         self.register_event(EventDefinition(ed_type=EventDefinitionType.DATA, ts_type_name="ibMinBar",
                                             event_data_type=EventDataType.BAR,
@@ -515,20 +422,9 @@ class Engine(EventSubscriber):
                                             bar_config=BarEventConfig(market_open_as_tick=True),
                                             order=-100),
                             self.current_price)
-        # self.register_event(DataEventDefinition("current_price", "ibMinBar", True, True),
-        #                     self.current_price)
-
-        # time_event_definitions: List[TimeEventDefinition] = self.get_time_event_definitions()
-        # data_event_definitions: List[DataEventDefinition] = self.get_data_event_definitions()
 
         event_line = EventLine()
-        # if len(data_event_definitions) > 0:
-        #     dep = DataEventProducer(data_event_definitions)
-        #     event_line.add_all(dep.history_events(strategy.scope, start, end))
-        # if len(time_event_definitions) > 0:
-        #     tep = TimeEventProducer(time_event_definitions)
-        #     event_line.add_all(tep.history_events(strategy.scope, start, end))
-        #
+
         ep = EventProducer(self.event_definitions)
         event_line.add_all(ep.history_events(strategy.scope, start, end))
 
@@ -550,24 +446,14 @@ class Engine(EventSubscriber):
     def run(self, strategy: AbstractStrategy, account: AbstractAccount, is_realtime_test: bool = False,
             mocked_events_generator: Callable[EventDefinition, List[Event]] = None,
             mocked_current_prices: Dict = None):
+        self.is_backtest = False
         if is_realtime_test:
             if not mocked_events_generator or not mocked_current_prices:
                 raise RuntimeError("需要mocked_events_generator， mocked_current_prices")
 
         strategy.initialize(self)
-        self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(30)),
+        self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(minute_offset=30)),
                             calc_net_value)
-        # time_event_definitions: List[TimeEventDefinition] = self.get_time_event_definitions()
-        # data_event_definitions: List[DataEventDefinition] = self.get_data_event_definitions()
-        #
-        # if len(time_event_definitions) > 0:
-        #     tep = TimeEventProducer(time_event_definitions)
-        #     tep.subscribe(self)
-        #     tep.start(strategy.scope)
-        # if len(data_event_definitions) > 0:
-        #     dep = DataEventProducer(data_event_definitions)
-        #     dep.subscribe(self)
-        #     dep.start(strategy.scope)
         self.account = account
         self.data_portal = DataPortal(False, "ibTick", is_realtime_test=is_realtime_test,
                                       mocked_current_prices=mocked_current_prices)
@@ -586,12 +472,7 @@ class Engine(EventSubscriber):
 
         self.account = None
         self.data_portal = None
-
-    # def get_time_event_definitions(self):
-    #     return [ed for ed in self.event_definitions if isinstance(ed, TimeEventDefinition)]
-    #
-    # def get_data_event_definitions(self):
-    #     return [ed for ed in self.event_definitions if isinstance(ed, DataEventDefinition)]
+        self.is_backtest = False
 
     def callback_for(self, event_definition: EventDefinition):
         return self.callback_map[event_definition]

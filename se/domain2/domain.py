@@ -19,6 +19,8 @@ class BeanContainer(object):
 
 
 def send_email(title: str, content: str):
+    if config.get("email", 'activate') == 'false':
+        return
     try:
         # 登录
         smtp = SMTP_SSL(config.get('email', 'host_server'))

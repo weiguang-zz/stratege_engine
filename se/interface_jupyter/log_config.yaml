@@ -1,0 +1,30 @@
+version: 1
+formatters:
+  brief:
+    format: '%(message)s'
+  precise:
+    format: '(%(threadName)s) %(asctime)s %(levelname)-8s %(filename)s:%(lineno)d %(message)s'
+    datefmt: '%Y-%m-%d %H:%M:%S'
+handlers:
+  console:
+    formatter: precise
+    class: logging.StreamHandler
+    level: INFO
+    stream: ext://sys.stdout
+  file:
+    class: logging.handlers.RotatingFileHandler
+    formatter: precise
+    filename: log/application.log
+    maxBytes: 104857600
+    backupCount: 3
+loggers:
+  ibapi:
+    # other configuration for logger 'foo.bar.baz'
+    handlers: [file]
+    level: INFO
+    propagate: False
+root:
+    handlers: [console, file]
+    level: INFO
+
+disable_existing_loggers: False
