@@ -6,3 +6,4 @@ requests>=2.25.0
 pinject
 jupyter
 cassandra-driver
+PyYAML
