@@ -1,3 +1,5 @@
+from configparser import ConfigParser
+
 import pandas as pd
 # from pandas._libs.tslibs.timestamps import Timestamp
 
@@ -91,6 +93,7 @@ import numpy as np
 
 import ibapi.wrapper
 import logging
+
 # import yaml
 # import sys
 #
@@ -119,11 +122,40 @@ import logging
 #
 # market_close = MarketClose(second_offset=-5)
 # print(market_close.next_time(get_calendar("NYSE"), Timestamp("2021-01-26 04:59:56", tz='Asia/Shanghai')).tz_convert("Asia/Shanghai"))
-from se.domain2.account.account import AccountRepo, AbstractAccount
-from se.domain2.domain import BeanContainer
+# from se.domain2.account.account import AccountRepo, AbstractAccount
+# from se.domain2.domain import BeanContainer
+# import se.infras
+#
+# repo:AccountRepo = BeanContainer.getBean(AccountRepo)
+# acc: AbstractAccount = repo.find_one("test25")
+# operations = acc.history_operations()
+
+# config_file_name = 'config.ini'
+# config = ConfigParser()
+# config.read(config_file_name)
+# # print(config.get("email", 'activate'))
+# from pandas._libs.tslibs.timestamps import Timestamp
+#
+# from se.domain2.account.account import OrderDirection, MKTOrder
+# from se.infras.ib import IBAccount
+#
+# acc = IBAccount("test50", 10000).with_client(config.get('ib', 'host'), config.getint('ib', 'port'),
+#                                              config.getint('ib', 'client_id'))
+# order = MKTOrder("GSX_STK_USD_SMART", direction=OrderDirection.BUY, quantity=200,
+#                  place_time=Timestamp.now(tz='Asia/Shanghai'))
+# acc.place_order(order)
+
+# 查询数据
+from pandas._libs.tslibs.timestamps import Timestamp
 import se.infras
 
-repo:AccountRepo = BeanContainer.getBean(AccountRepo)
-acc: AbstractAccount = repo.find_one("test25")
-operations = acc.history_operations()
+from se.domain2.domain import BeanContainer
+from se.domain2.time_series.time_series import TimeSeriesRepo, TimeSeries, HistoryDataQueryCommand
 
+repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+ts: TimeSeries = repo.find_one("ibMinBar")
+comm = HistoryDataQueryCommand(start=Timestamp('2019-06-17 21:30:00', tz='Asia/Shanghai'),
+                        end=Timestamp('2019-06-18 05:30:00', tz='Asia/Shanghai'),
+                        codes=['GSX_STK_USD_SMART'])
+data = ts.history_data(comm, from_local=False)
+print("done")

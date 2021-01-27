@@ -439,6 +439,15 @@ class AbstractAccount(metaclass=ABCMeta):
         operations.append(current_operation)
         return operations
 
+    def net_value(self, current_prices: Dict[str, float]):
+        net_value = 0
+        net_value += self.cash
+        for code in self.positions.keys():
+            if code not in current_prices:
+                raise RuntimeError("缺少价格数据")
+            net_value += self.positions[code] * current_prices[code]
+        return net_value
+
 
 class AccountRepo(metaclass=ABCMeta):
     @abstractmethod
