@@ -165,7 +165,8 @@ class TimeEventThread(Thread):
                         self.subscriber.on_event(event)
                 time.sleep(0.8)
         except RuntimeError as e:
-            logging.error('error', e)
+            import traceback
+            logging.error("{}".format(traceback.format_exc()))
 
 
 class TimeEventProducer(EventProducer):

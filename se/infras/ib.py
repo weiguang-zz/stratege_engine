@@ -176,7 +176,7 @@ class IBClient(EWrapper):
         if req.condition.acquire():
             req.condition.wait(20)
         if not req.resp:
-            raise RuntimeError("没有获取到数据")
+            raise RuntimeError("获取数据超时或者没有获取到数据")
         resp = req.resp
         # 清理数据
         Request.clear(req.req_id)
@@ -184,7 +184,7 @@ class IBClient(EWrapper):
 
     def _req_history_ticks(self, code: str, start: Timestamp, end: Timestamp, nums: int, what_to_show: str,
                            use_rth: int,
-                           ignore_size: bool, misc_options):
+                           ignore_size: bool, misc_options) -> List[HistoricalTickLast]:
         req = Request.new_request()
         contract = self.code_to_contract(code)
         self.cli.reqHistoricalTicks(req.req_id, contract,
@@ -194,7 +194,7 @@ class IBClient(EWrapper):
         if req.condition.acquire():
             req.condition.wait(10)
         if not req.resp:
-            raise RuntimeError("没有获取到数据")
+            raise RuntimeError("获取数据超时或者没有获取到数据")
         resp = req.resp
         Request.clear(req.req_id)
         return resp
@@ -553,6 +553,8 @@ class IBTick(TimeSeriesFunction):
         return all_ts_datas
 
     def current_price(self, codes) -> Mapping[str, Price]:
+        if len(codes) <= 0:
+            raise RuntimeError("非法的codes")
         command = HistoryDataQueryCommand(start=None, end=Timestamp.now(tz='Asia/Shanghai'), codes=codes, window=1)
         code_to_ticks = self.client.req_tick(command)
         cp: Mapping[str, Price] = {}

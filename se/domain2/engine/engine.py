@@ -15,6 +15,7 @@ from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Ti
 from se.domain2.domain import BeanContainer
 from se.domain2.time_series.time_series import TimeSeriesRepo, HistoryDataQueryCommand, TimeSeriesSubscriber, TSData, \
     Price
+import numpy as np
 
 
 class Rule(metaclass=ABCMeta):
@@ -272,8 +273,8 @@ class TimeEventThread(Thread):
         self.calendar = calendar
 
     def run(self) -> None:
-        try:
-            while True:
+        while True:
+            try:
                 t: Timestamp = Timestamp.now(tz='Asia/Shanghai')
                 logging.info("当前时间:{}".format(t))
                 for ed in self.time_event_conditions:
@@ -281,8 +282,9 @@ class TimeEventThread(Thread):
                         event = Event(ed, t, {})
                         self.subscriber.on_event(event)
                 time.sleep(1)
-        except RuntimeError as e:
-            logging.error('error', e)
+            except:
+                import traceback
+                logging.error("{}".format(traceback.format_exc()))
 
 
 class DataPortal(object):
@@ -332,11 +334,61 @@ class DataPortal(object):
 class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
 
     @abstractmethod
-    def initialize(self, engine: Engine):
+    def do_initialize(self, engine: Engine):
         pass
+
+    def initialize(self, engine: Engine):
+        self.is_backtest = engine.is_backtest
+        self.do_initialize(engine)
 
     def __init__(self, scope: Scope):
         self.scope = scope
+
+
+    def get_recent_price_after(self, codes: List[str], visible_time: Timestamp, data_portal: DataPortal):
+        """
+        该方法用在实盘中，会一直等待直到获取到visible_time之后的价格数据，通常用于在开盘的时候调用
+        :param codes:
+        :param visible_time:
+        :param data_portal:
+        :return:
+        """
+        while True:
+            retry = 3
+            res = {}
+            while True:
+                try:
+                    cp = data_portal.current_price(codes, visible_time)
+                    break
+                except RuntimeError as e:
+                    logging.error("获取最新价格异常，将会重试{}".format(retry))
+                    retry -= 1
+                    if retry <= 0:
+                        raise e
+            if np.array([cp[code].time >= visible_time for code in codes]).all():
+                for code in codes:
+                    res[code] = cp[code].price
+                if len(codes) == 1:
+                    return res[codes[0]]
+                else:
+                    return res
+            else:
+                if self.is_backtest:
+                    # 回测环境下，不进行等待
+                    msg = "没有获取到最新的价格，期望获取{}之后的数据，但是获取到的数据是:{}, 将会使用非最新的价格".format(str(visible_time), str(cp))
+                    logging.warning(msg)
+
+                    for code in codes:
+                        res[code] = cp[code].price
+                    if len(codes) == 1:
+                        return res[codes[0]]
+                    else:
+                        return res
+                else:
+                    logging.info("没有获取到最新的价格，将会重试")
+                    time.sleep(1)
+                    continue
+
 
 
 class EventLine(object):

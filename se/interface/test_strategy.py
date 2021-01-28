@@ -11,7 +11,7 @@ from se.domain2.engine.engine import AbstractStrategy, Event, DataPortal, Market
 
 class TestStrategy1(AbstractStrategy):
 
-    def initialize(self, engine: Engine):
+    def do_initialize(self, engine: Engine):
 
         engine.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen()),
                               self.market_open)

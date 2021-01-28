@@ -223,7 +223,8 @@ class LimitOrder(Order):
 
     def __init__(self, code, direction, quantity, place_time, limit_price):
         super().__init__(code, direction, quantity, place_time)
-        self.limit_price = limit_price
+        # 价格调整到两位小数
+        self.limit_price = round(limit_price, 2)
 
     def bar_match(self, bar: Bar):
         if self.direction == OrderDirection.BUY:
@@ -253,7 +254,7 @@ class CrossMKTOrder(Order):
     def __init__(self, code, direction, quantity, place_time, cross_direction: CrossDirection, cross_price):
         super().__init__(code, direction, quantity, place_time)
         self.cross_direction = cross_direction
-        self.cross_price = cross_price
+        self.cross_price = round(cross_price, 2)
 
     def bar_match(self, bar: Bar):
         if self.cross_direction == CrossDirection.UP:
