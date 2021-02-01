@@ -2,7 +2,7 @@ import pandas as pd
 from trading_calendars import get_calendar
 
 from se.domain2.engine.engine import Engine, Scope
-from se.strategies.strategy import TestStrategy3
+from strategies.strategy import TestStrategy3
 
 engine = Engine()
 scope = Scope(["GSX_STK_USD_SMART"], trading_calendar=get_calendar("NYSE"))

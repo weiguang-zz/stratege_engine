@@ -305,6 +305,7 @@ class AbstractAccount(metaclass=ABCMeta):
         self.positions = {}
         self.history_net_value: Mapping[Timestamp, float] = {}
         self.orders: List[Order] = []
+        self.order_callback = None
         # self.current_operation: Operation = Operation(initial_cash)
         # self.history_operations: List[Operation] = []
 
@@ -364,7 +365,8 @@ class AbstractAccount(metaclass=ABCMeta):
 
         # 修改订单的状态
         order.order_filled(execution)
-        self.order_callback.order_status_change(order, self)
+        if self.order_callback:
+            self.order_callback.order_status_change(order, self)
 
     def _reverse(self, order: Order, execution: OrderExecution):
         self.cash -= execution.cash_change()

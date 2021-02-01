@@ -136,6 +136,7 @@ class IBClient(EWrapper):
         cli = EClient(self)
         self.cli = cli
         self.account_subscriber = None
+        self.tick_subscriber = None
         self._next_valid_id = None
         self.code_contract_map = {}
 
