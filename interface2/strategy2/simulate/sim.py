@@ -17,6 +17,6 @@ acc = repo.find_one(account_name)
 if not acc:
     acc = IBAccount(account_name, 10000)
 
-acc.with_order_callback(strategy).with_client(config.get('ib', 'host'), config.getint('ib', 'port'),
-                                              config.getint('ib', 'client_id'))
+acc.with_order_callback(strategy).with_client(config.get('ib_account', 'host'), config.getint('ib_account', 'port'),
+                                              config.getint('ib_account', 'client_id'))
 engine.run(strategy, acc)
