@@ -1,0 +1,1 @@
+nohup env PYTHONPATH=/home/admin/strategy/stratege_engine/ config.dir=/home/admin/strategy/stratege_engine/interface2 python sim.py > service.out 2>&1 &
