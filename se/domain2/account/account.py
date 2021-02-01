@@ -8,6 +8,7 @@ from typing import *
 from pandas import Timedelta, Timestamp
 
 from se.domain2.domain import BeanContainer
+from se.domain2.time_series.time_series import Bar, Tick
 
 
 class OrderDirection(Enum):
@@ -26,29 +27,6 @@ class OrderStatus(Enum):
     FILLED = "FILLED"
 
 
-class Bar(object):
-    def __init__(self, **kwargs):
-        names = ['code', 'start_time', 'visible_time', 'open', 'high', 'low', 'close', 'volume']
-        for n in names:
-            if n not in kwargs:
-                raise RuntimeError("need key:" + n)
-
-        self.code = kwargs['code']
-        self.start_time = kwargs['start_time']
-        self.visible_time = kwargs['visible_time']
-        self.open_price = kwargs['open']
-        self.high_price = kwargs['high']
-        self.low_price = kwargs['low']
-        self.close_price = kwargs['close']
-        self.volume = kwargs['volume']
-
-
-class Tick(object):
-    def __init__(self, code, visible_time, price, size):
-        self.code = code
-        self.visible_time = visible_time
-        self.price = price
-        self.size = size
 
 
 class OrderExecution(object):

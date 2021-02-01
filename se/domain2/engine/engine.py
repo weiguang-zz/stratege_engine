@@ -14,7 +14,7 @@ from trading_calendars import TradingCalendar
 from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Tick, OrderCallback, AccountRepo
 from se.domain2.domain import BeanContainer
 from se.domain2.time_series.time_series import TimeSeriesRepo, HistoryDataQueryCommand, TimeSeriesSubscriber, TSData, \
-    Price
+    Price, TimeSeries
 import numpy as np
 
 
@@ -184,24 +184,28 @@ class EventProducer(TimeSeriesSubscriber):
                     if ed.event_data_type == EventDataType.BAR:
                         # 添加bar事件
                         data['start_time'] = data['date']
-                        bar = Bar(**data)
+                        bar = Bar(ed.ts_type_name, visible_time, code, data['date'], data['open'], data['high'],
+                                  data['low'], data['close'], data['volume'])
                         total_events.append(Event(ed, visible_time, bar))
                         if ed.bar_config.market_open_as_tick and not ed.bar_config.bar_open_as_tick:
                             if bar.start_time in market_opens:
                                 total_events.append(Event(ed, bar.start_time + ed.bar_config.market_open_as_tick_delta,
-                                                          Tick(code, visible_time, bar.open_price, -1)))
+                                                          Tick(ed.ts_type_name, visible_time, code,
+                                                               bar.open_price, -1)))
 
                         if ed.bar_config.bar_open_as_tick:
                             tick_visible_time = bar.start_time + ed.bar_config.bar_open_as_tick_delta
                             total_events.append(Event(ed, tick_visible_time,
-                                                      Tick(code, tick_visible_time, bar.open_price, -1)))
+                                                      Tick(ed.ts_type_name, tick_visible_time, code,
+                                                           bar.open_price, -1)))
 
                         if ed.bar_config.market_close_as_tick:
                             if bar.visible_time in market_closes:
                                 total_events.append(Event(ed, visible_time + ed.bar_config.market_close_as_tick_delta,
-                                                          Tick(code, visible_time, bar.close_price, -1)))
+                                                          Tick(ed.ts_type_name, visible_time, code,
+                                                               bar.close_price, -1)))
                     elif ed.event_data_type == EventDataType.TICK:
-                        tick = Tick(**data)
+                        tick = Tick(ed.ts_type_name, visible_time, code, data['price'], data['size'])
                         total_events.append(Event(ed, tick.visible_time,
                                                   tick))
                     else:
@@ -287,48 +291,65 @@ class TimeEventThread(Thread):
                 logging.error("{}".format(traceback.format_exc()))
 
 
-class DataPortal(object):
+class DataPortal(TimeSeriesSubscriber):
+
+    def on_data(self, data: TSData):
+        if isinstance(data, Bar):
+            self._current_price_map[data.code] = Price(data.code, data.close_price, data.visible_time)
+        elif isinstance(data, Tick):
+            self._current_price_map[data.code] = Price(data.code, data.price, data.visible_time)
+        else:
+            raise RuntimeError(" wrong ts_data type")
 
     def history_data(self, ts_type_name, codes, end, window):
         command = HistoryDataQueryCommand(None, end, codes, window)
         ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ts_type_name)
         return ts.history_data(command)
 
-    def __init__(self, is_backtest: bool, ts_type_name_for_current_price: str = None, is_realtime_test: bool = False,
-                 mocked_current_prices: Dict = {}):
+    def __init__(self, is_backtest: bool, ts_type_name_for_current_price: str, engine: Engine = None,
+                 subscribe_codes: List[str] = None, mocked_current_prices: Dict[Timestamp, Dict[str, Price]] = {}):
         if not is_backtest:
-            if is_realtime_test and not mocked_current_prices:
-                raise RuntimeError("实盘测试的时候，必须指定mocked的当前价格")
-
-            if not is_realtime_test and not ts_type_name_for_current_price:
-                raise RuntimeError("need ts_type_name_for_current_price")
+            if not subscribe_codes:
+                raise RuntimeError("need subscribe codes")
+            ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+            ts: TimeSeries = ts_repo.find_one(ts_type_name_for_current_price)
+            ts.subscribe(self, subscribe_codes)
+        else:
+            if not engine:
+                raise RuntimeError("need engine")
+            engine.register_event(EventDefinition(ed_type=EventDefinitionType.DATA,
+                                                  ts_type_name=ts_type_name_for_current_price,
+                                                  event_data_type=EventDataType.BAR,
+                                                  bar_config=BarEventConfig(market_open_as_tick=True),
+                                                  order=-100),
+                                  self.set_current_price)
 
         self.ts_type_name_for_current_price = ts_type_name_for_current_price
         self.is_backtest = is_backtest
         self._current_price_map: Mapping[str, Price] = {}
-        self.is_realtime_test = is_realtime_test
-        self.mocked_current_price = Series(mocked_current_prices)
+        self.mocked_current_price = mocked_current_prices
 
     def current_price(self, codes: List[str], current_time: Timestamp) -> Mapping[str, Price]:
-        """
-        在实盘或者回测的时候，获取当前价格的方式不同，实盘的时候，依赖某个时序类型来获取最新的价格。 但是在回测的时候，会从缓存中获取，
-        缓存是撮合的时候构建的
-        :param current_time:
-        :param codes:
-        :return:
-        """
-        if self.is_backtest:
-            return {code: self._current_price_map[code] for code in codes}
-        else:
-            if not self.is_realtime_test:
-                ts = BeanContainer.getBean(TimeSeriesRepo).find_one(self.ts_type_name_for_current_price)
-                return ts.current_price(codes)
-            else:
-                cp = self.mocked_current_price[current_time]
-                return {code: Price(code, cp[code], current_time) for code in cp.keys() if code in codes}
 
-    def set_current_price(self, code, cp: Price):
-        self._current_price_map[code] = cp
+        if self.mocked_current_price:
+            cp = self.mocked_current_price[current_time]
+            return {code: cp[code] for code in codes}
+        else:
+            res = {}
+            for code in codes:
+                if code in self._current_price_map:
+                    res[code] = self._current_price_map[code]
+
+            return res
+
+    def set_current_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
+        if isinstance(event.data, Bar):
+            self._current_price_map[event.data.code] = \
+                Price(event.data.code, event.data.close_price, event.visible_time)
+        elif isinstance(event.data, Tick):
+            self._current_price_map[event.data.code] = Price(event.data.code, event.data.price, event.visible_time)
+        else:
+            raise RuntimeError("wrong event data")
 
 
 class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
@@ -344,7 +365,6 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
     def __init__(self, scope: Scope):
         self.scope = scope
 
-
     def get_recent_price_after(self, codes: List[str], visible_time: Timestamp, data_portal: DataPortal):
         """
         该方法用在实盘中，会一直等待直到获取到visible_time之后的价格数据，通常用于在开盘的时候调用
@@ -353,42 +373,25 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
         :param data_portal:
         :return:
         """
-        while True:
-            retry = 3
+        retry_limit = 20
+        if self.is_backtest:
+            retry_limit = 1
+        count = 0
+        while count < retry_limit:
             res = {}
-            while True:
-                try:
-                    cp = data_portal.current_price(codes, visible_time)
-                    break
-                except RuntimeError as e:
-                    logging.error("获取最新价格异常，将会重试{}".format(retry))
-                    retry -= 1
-                    if retry <= 0:
-                        raise e
-            if np.array([cp[code].time >= visible_time for code in codes]).all():
-                for code in codes:
-                    res[code] = cp[code].price
-                if len(codes) == 1:
-                    return res[codes[0]]
-                else:
-                    return res
-            else:
-                if self.is_backtest:
-                    # 回测环境下，不进行等待
-                    msg = "没有获取到最新的价格，期望获取{}之后的数据，但是获取到的数据是:{}, 将会使用非最新的价格".format(str(visible_time), str(cp))
-                    logging.warning(msg)
-
+            cp = data_portal.current_price(codes, visible_time)
+            if len(cp) == len(codes):
+                if np.array([cp[code].time >= visible_time for code in codes]).all():
                     for code in codes:
                         res[code] = cp[code].price
                     if len(codes) == 1:
                         return res[codes[0]]
                     else:
                         return res
-                else:
-                    logging.info("没有获取到最新的价格，将会重试")
-                    time.sleep(1)
-                    continue
 
+            logging.warning("没有获取到最新的价格数据，将会重试:{}".format(count))
+            count += 1
+            time.sleep(1)
 
 
 class EventLine(object):
@@ -440,27 +443,19 @@ class Engine(EventSubscriber):
             raise RuntimeError("wrong event data")
         account.match(event.data)
 
-    def current_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
-        if isinstance(event.data, Bar):
-            data_portal.set_current_price(event.data.code,
-                                          Price(event.data.code, event.data.close_price, event.visible_time))
-        elif isinstance(event.data, Tick):
-            data_portal.set_current_price(event.data.code, Price(event.data.code, event.data.price, event.visible_time))
-        else:
-            raise RuntimeError("wrong event data")
-
     def run_backtest(self, strategy: AbstractStrategy, start: Timestamp, end: Timestamp,
                      initial_cash: float,
-                     account_name: str):
+                     account_name: str,
+                     ts_type_name_for_match: str):
         self.is_backtest = True
         # 检查account_name是否唯一
         if not self.is_unique_account(account_name):
             raise RuntimeError("account name重复")
-        data_portal = DataPortal(True)
+        data_portal = DataPortal(True, ts_type_name_for_match, self)
         strategy.initialize(self)
         self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(minute_offset=30)),
                             calc_net_value)
-        self.register_event(EventDefinition(ed_type=EventDefinitionType.DATA, ts_type_name="ibMinBar",
+        self.register_event(EventDefinition(ed_type=EventDefinitionType.DATA, ts_type_name=ts_type_name_for_match,
                                             event_data_type=EventDataType.BAR,
                                             bar_config=BarEventConfig(bar_open_as_tick=True,
                                                                       bar_open_as_tick_delta=Timedelta(seconds=1),
@@ -469,11 +464,6 @@ class Engine(EventSubscriber):
                                                                       ),
                                             order=-10),
                             self.match)
-        self.register_event(EventDefinition(ed_type=EventDefinitionType.DATA, ts_type_name="ibMinBar",
-                                            event_data_type=EventDataType.BAR,
-                                            bar_config=BarEventConfig(market_open_as_tick=True),
-                                            order=-100),
-                            self.current_price)
 
         event_line = EventLine()
 
@@ -507,7 +497,7 @@ class Engine(EventSubscriber):
         self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(minute_offset=30)),
                             calc_net_value)
         self.account = account
-        self.data_portal = DataPortal(False, "ibTick", is_realtime_test=is_realtime_test,
+        self.data_portal = DataPortal(False, "ibTick", subscribe_codes=strategy.scope.codes,
                                       mocked_current_prices=mocked_current_prices)
         if not mocked_events_generator:
             ep = EventProducer(self.event_definitions)

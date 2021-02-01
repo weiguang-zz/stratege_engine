@@ -1,47 +1,52 @@
-import logging
 import logging.config
 import os
-import yaml
+from configparser import ConfigParser
 
-file_name = "log_config.yaml"
-if os.path.exists(file_name):
-    logging.config.dictConfig(yaml.load(open(file_name), Loader=yaml.SafeLoader))
+import yaml
+from cassandra.cqlengine import connection
+
+from se.domain2.account.account import AccountRepo
+from se.domain2.domain import BeanContainer
+from se.domain2.time_series.time_series import TSFunctionRegistry, TimeSeriesRepo
+from se.infras.ib import IBMinBar, IBTick
+from se.infras.repos import TimeSeriesRepoImpl, AccountRepoImpl
+
+BeanContainer.register(TimeSeriesRepo, TimeSeriesRepoImpl())
+BeanContainer.register(AccountRepo, AccountRepoImpl())
+
+if not os.getenv("config.dir"):
+    raise RuntimeError("没有配置config.dir")
+
+# 初始化日志配置
+log_config = "{}/log.yaml".format(os.getenv("config.dir"))
+if os.getenv("config.log"):
+    log_config = os.getenv("config.log")
+
+if os.path.exists(log_config):
+    logging.config.dictConfig(yaml.load(open(log_config), Loader=yaml.SafeLoader))
+    logging.info("初始化日志配置成功")
 else:
     logging.basicConfig(level=logging.INFO)
     logging.info("没有log的配置文件,将使用默认配置")
 
+# 初始化应用配置
+config_file = "{}/config_default.ini".format(os.getenv("config.dir"))
+if not os.path.exists(config_file):
+    raise RuntimeError("需要配置文件config_default.ini")
+config = ConfigParser()
+config.read(config_file)
+# 如果运行目录存在config.ini的话，则替换默认的配置
+if os.path.exists("config.ini"):
+    config.read("config.ini")
+logging.info("初始化应用配置成功")
 
+# 初始化DB连接
+connection.setup(config.get("cassandra", "contact_points").split(","),
+                 config.get("cassandra", "session_keyspace"), protocol_version=3,
+                 port=config.getint("cassandra", "port"))
 
-# def SetupLogger():
-#     if not os.path.exists("log"):
-#         os.makedirs("log")
-#
-#     time.strftime("application.%Y%m%d_%H%M%S.log")
-#
-#     recfmt = '(%(threadName)s) %(asctime)s.%(msecs)03d %(levelname)s %(filename)s:%(lineno)d %(message)s'
-#     timefmt = '%y%m%d_%H:%M:%S'
-#
-#     # logging.basicConfig( level=logging.DEBUG,
-#     #                    format=recfmt, datefmt=timefmt)
-#     logging.basicConfig(filename=time.strftime("log/application.%y%m%d.log"),
-#                         filemode="a",
-#                         level=logging.INFO,
-#                         format=recfmt, datefmt=timefmt)
-#     logger = logging.getLogger()
-#     console = logging.StreamHandler()
-#     console.setFormatter(logging.Formatter(fmt=recfmt, datefmt=timefmt))
-#     console.setLevel(logging.DEBUG)
-#     logger.addHandler(console)
-#
-#
-# SetupLogger()
-
-
-# # 初始化依赖注入框架
-# class MyBindingSpec(BindingSpec):
-#     def configure(self, bind):
-#         bind("config", to_instance=config, in_scope=pinject.SINGLETON)
-#
-#
-# obj_graph = pinject.new_object_graph(modules=None, classes=[ConfigParser],
-#                                      binding_specs=[MyBindingSpec()], only_use_explicit_bindings=True)
+# 注册时序类型
+TSFunctionRegistry.register(IBMinBar(config.get("ib_data", "host"), config.getint("ib_data", 'port'),
+                                     config.getint('ib_data', 'client_id')))
+TSFunctionRegistry.register(IBTick(config.get("ib_data", "host"), config.getint("ib_data", 'port'),
+                                   config.getint('ib_data', 'client_id')))

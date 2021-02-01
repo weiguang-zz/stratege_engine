@@ -3,7 +3,6 @@ from email.header import Header
 from email.mime.text import MIMEText
 from smtplib import SMTP_SSL
 from typing import Mapping
-from se.domain2 import config
 
 class BeanContainer(object):
 
@@ -19,6 +18,7 @@ class BeanContainer(object):
 
 
 def send_email(title: str, content: str):
+    from se import config
     if config.get("email", 'activate') == 'false':
         return
     try:

@@ -8,12 +8,14 @@ import logging
 
 from se.domain2.domain import BeanContainer
 
+
 class Price(object):
 
     def __init__(self, code, price, time: Timestamp):
         self.code = code
         self.price = price
         self.time = time
+
 
 class Column(object):
 
@@ -74,7 +76,6 @@ class DataRecord(object):
             self.end = command.end
 
 
-
 class HistoryDataQueryCommand(object):
     def __init__(self, start: Timestamp, end: Timestamp, codes: List[str], window: int = 100):
         if not end:
@@ -119,7 +120,6 @@ class SingleCodeQueryCommand(HistoryDataQueryCommand):
             increment_commands.append(SingleCodeQueryCommand(data_record.end, big_end, self.code))
         return increment_commands
 
-
         pass
 
 
@@ -144,25 +144,37 @@ class TSData(object):
         return dt
 
 
+class Bar(TSData):
+
+    def __init__(self, ts_type_name: str, visible_time: Timestamp, code: str, start_time, open_price,
+                 high_price, low_price, close_price, volume):
+        self.start_time = start_time
+        self.open_price = open_price
+        self.high_price = high_price
+        self.low_price = low_price
+        self.close_price = close_price
+        self.volume = volume
+        super().__init__(ts_type_name, visible_time, code, {})
+
+
+class Tick(TSData):
+
+    def __init__(self, ts_type_name: str, visible_time: Timestamp, code: str, price, size):
+        self.price = price
+        self.size = size
+        super().__init__(ts_type_name, visible_time, code, {})
+
+
 class TimeSeriesDataRepo(object):
     @classmethod
     def save(cls, data_list: List[TSData]):
         time_series_repo = BeanContainer.getBean(TimeSeriesRepo)
         time_series_repo.save_ts(data_list)
 
-
-
     @classmethod
     def query(cls, ts_type_name: str, command: HistoryDataQueryCommand) -> List[TSData]:
         time_series_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
         return time_series_repo.query_ts_data(ts_type_name, command)
-
-
-
-class Subscription(object):
-    def __init__(self, ts_type_name: str, code: str):
-        self.ts_type_name = ts_type_name
-        self.code = code
 
 
 class TimeSeriesSubscriber(metaclass=ABCMeta):
@@ -180,20 +192,42 @@ class TimeSeriesFunction(metaclass=ABCMeta):
     def load_history_data(self, command: HistoryDataQueryCommand) -> List[TSData]:
         pass
 
-    @abstractmethod
-    def current_price(self, codes) -> Mapping[str, Price]:
-        pass
+    # @abstractmethod
+    # def current_price(self, codes) -> Mapping[str, Price]:
+    #     pass
 
     @abstractmethod
     def load_assets(self) -> List[Asset]:
         pass
 
-    @abstractmethod
-    def sub_func(self, subscription: Subscription):
-        pass
+    def sub_func(self, subscriber: TimeSeriesSubscriber, codes: List[str]):
+        need_sub_codes = [code for code in codes if code not in self.sub_codes]
+        if len(need_sub_codes) > 0:
+            self.do_sub(need_sub_codes)
+            self.sub_codes.extend(need_sub_codes)
+        for code in codes:
+            if code in self.sub_map:
+                if subscriber not in self.sub_map[code]:
+                    self.sub_map[code].append(subscriber)
+            else:
+                self.sub_map[code] = [subscriber]
 
     @abstractmethod
-    def unsub_func(self, subscription: Subscription):
+    def do_sub(self, codes: List[str]):
+        pass
+
+    def unsub_func(self, subscriber: TimeSeriesSubscriber, codes: List[str]):
+        need_unsub_codes = [code for code in codes if code in self.sub_codes]
+        if len(need_unsub_codes) > 0:
+            self.do_unsub(need_unsub_codes)
+            for code in need_unsub_codes:
+                self.sub_codes.remove(code)
+        for code in codes:
+            if code in self.sub_map and subscriber in self.sub_map[code]:
+                self.sub_map[code].remove(subscriber)
+
+    @abstractmethod
+    def do_unsub(self, codes):
         pass
 
     @abstractmethod
@@ -206,6 +240,8 @@ class TimeSeriesFunction(metaclass=ABCMeta):
         for col in cols:
             col_map[col.name] = col
         self.column_map = col_map
+        self.sub_codes: List[str] = []
+        self.sub_map: Mapping[str, List[TimeSeriesSubscriber]] = {}
 
     def parse(self, provider_data: Mapping[str, object]):
         parsed_value = {}
@@ -241,7 +277,6 @@ class TimeSeriesFunction(metaclass=ABCMeta):
             values[col_name] = column.deserialize(dt[col_name])
 
         return values
-
 
 
 class TimeSeries(object):
@@ -289,10 +324,10 @@ class TimeSeries(object):
             return df.loc[df.index.get_level_values(0)[-command.window:]]
 
     def subscribe(self, subscriber: TimeSeriesSubscriber, codes: List[str]):
-        pass
+        self.func.sub_func(subscriber, codes)
 
     def unsubscribe(self, subscriber: TimeSeriesSubscriber, codes: List[str]):
-        pass
+        self.func.unsub_func(subscriber, codes)
 
     def on_data(self, data: TSData):
         """
@@ -300,7 +335,12 @@ class TimeSeries(object):
         :param data:
         :return:
         """
-        pass
+        if data.code not in self.sub_map:
+            logging.warning("收到了没有订阅的数据，将取消订阅:{}".format(str(data.__dict__)))
+            self.func.unsub_func([data.code])
+            return
+        for sub in self.sub_map[data.code]:
+            sub.on_data(data)
 
     def download_data(self, command: HistoryDataQueryCommand):
         increment_commands = []
@@ -327,10 +367,6 @@ class TimeSeries(object):
     def save(self):
         time_series_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
         time_series_repo.save(self)
-
-
-    def current_price(self, codes: List[str]) -> Mapping[str, Price]:
-        return self.func.current_price(codes)
 
     def is_local_cached(self, command: HistoryDataQueryCommand):
         increment_commands = []

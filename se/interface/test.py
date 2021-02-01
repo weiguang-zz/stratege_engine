@@ -1,3 +1,4 @@
+import time
 from configparser import ConfigParser
 
 import pandas as pd
@@ -97,7 +98,7 @@ import logging
 # import yaml
 # import sys
 #
-# dt = yaml.load(open("log_config.yaml"), Loader=yaml.SafeLoader)
+# dt = yaml.load(open("log.yaml"), Loader=yaml.SafeLoader)
 #
 # import logging.config
 # logging.config.dictConfig(dt, )
@@ -113,7 +114,7 @@ import logging
 #
 # import yaml
 #
-# logging.config.dictConfig(yaml.load(open("log_config.yaml"), Loader=yaml.SafeLoader))
+# logging.config.dictConfig(yaml.load(open("log.yaml"), Loader=yaml.SafeLoader))
 # logging.info("哈哈")
 # from pandas._libs.tslibs.timestamps import Timestamp
 # from trading_calendars import get_calendar
@@ -130,7 +131,7 @@ import logging
 # acc: AbstractAccount = repo.find_one("test25")
 # operations = acc.history_operations()
 
-# config_file_name = 'config.ini'
+# config_file_name = 'config_default.ini'
 # config = ConfigParser()
 # config.read(config_file_name)
 # # print(config.get("email", 'activate'))
@@ -146,16 +147,32 @@ import logging
 # acc.place_order(order)
 
 # 查询数据
-from pandas._libs.tslibs.timestamps import Timestamp
-import se.infras
+# from pandas._libs.tslibs.timestamps import Timestamp
+# import se.infras
+#
+# from se.domain2.domain import BeanContainer
+# from se.domain2.time_series.time_series import TimeSeriesRepo, TimeSeries, HistoryDataQueryCommand
+#
+# repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+# ts: TimeSeries = repo.find_one("ibMinBar")
+# comm = HistoryDataQueryCommand(start=Timestamp('2019-06-17 21:30:00', tz='Asia/Shanghai'),
+#                         end=Timestamp('2019-06-18 00:30:00', tz='Asia/Shanghai'),
+#                         codes=['GSX_STK_USD_SMART'])
+#
+# while True:
+#     try:
+#
+#         data = ts.history_data(comm, from_local=False)
+#         time.sleep(10)
+#     except:
+#         logging.error("error")
+#         time.sleep(10)
+# print("done")
 
-from se.domain2.domain import BeanContainer
-from se.domain2.time_series.time_series import TimeSeriesRepo, TimeSeries, HistoryDataQueryCommand
+import logging
+logging.basicConfig(level=logging.INFO)
 
-repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
-ts: TimeSeries = repo.find_one("ibMinBar")
-comm = HistoryDataQueryCommand(start=Timestamp('2019-06-17 21:30:00', tz='Asia/Shanghai'),
-                        end=Timestamp('2019-06-18 05:30:00', tz='Asia/Shanghai'),
-                        codes=['GSX_STK_USD_SMART'])
-data = ts.history_data(comm, from_local=False)
-print("done")
+while True:
+    logging.info("time:{}".format(time.strftime("%Y-%m-%d %H:%M:%S")))
+
+    time.sleep(2)

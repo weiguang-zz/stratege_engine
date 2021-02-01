@@ -10,7 +10,7 @@ from typing import *
 from ibapi import order_condition
 from ibapi.client import EClient
 from ibapi.commission_report import CommissionReport
-from ibapi.common import BarData, HistoricalTickLast, ListOfHistoricalTickLast, OrderId
+from ibapi.common import BarData, HistoricalTickLast, ListOfHistoricalTickLast, OrderId, TickAttribLast, TickerId
 from ibapi.contract import Contract, ContractDetails
 from ibapi.execution import Execution, ExecutionFilter
 from ibapi.order import Order as IBOrder
@@ -22,7 +22,7 @@ from pandas import Timestamp
 from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MKTOrder, OrderDirection, LimitOrder, \
     DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution, Operation, OrderStatus
 from se.domain2.domain import send_email
-from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Subscription, Asset, HistoryDataQueryCommand, \
+from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Asset, HistoryDataQueryCommand, \
     TSData, Price
 
 
@@ -57,23 +57,33 @@ class Request(object):
 class IBClient(EWrapper):
     clients_map: Mapping[str, IBClient] = {}
 
+    def error(self, reqId: TickerId, errorCode: int, errorString: str):
+        super().error(reqId, errorCode, errorString)
+
+    def tickByTickAllLast(self, reqId: int, tickType: int, time: int, price: float, size: int,
+                          tickAttribLast: TickAttribLast, exchange: str, specialConditions: str):
+        super().tickByTickAllLast(reqId, tickType, time, price, size, tickAttribLast, exchange, specialConditions)
+        if self.tick_subscriber:
+            self.tick_subscriber.tickByTickAllLast(reqId, tickType, time, price, size, tickAttribLast,
+                                                   exchange, specialConditions)
+
     def execDetails(self, reqId: int, contract: Contract, execution: Execution):
         super().execDetails(reqId, contract, execution)
-        if self.subscriber:
-            self.subscriber.execDetails(reqId, contract, execution)
+        if self.account_subscriber:
+            self.account_subscriber.execDetails(reqId, contract, execution)
 
     def commissionReport(self, commissionReport: CommissionReport):
         super().commissionReport(commissionReport)
-        if self.subscriber:
-            self.subscriber.commissionReport(commissionReport)
+        if self.account_subscriber:
+            self.account_subscriber.commissionReport(commissionReport)
 
     def orderStatus(self, orderId: OrderId, status: str, filled: float, remaining: float, avgFillPrice: float,
                     permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
         super().orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId,
                             whyHeld, mktCapPrice)
-        if self.subscriber:
-            self.subscriber.orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId,
-                                        lastFillPrice, clientId, whyHeld, mktCapPrice)
+        if self.account_subscriber:
+            self.account_subscriber.orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId,
+                                                lastFillPrice, clientId, whyHeld, mktCapPrice)
 
     def historicalData(self, reqId: int, bar: BarData):
         super().historicalData(reqId, bar)
@@ -125,7 +135,7 @@ class IBClient(EWrapper):
         super().__init__()
         cli = EClient(self)
         self.cli = cli
-        self.subscriber = None
+        self.account_subscriber = None
         self._next_valid_id = None
         self.code_contract_map = {}
 
@@ -161,6 +171,10 @@ class IBClient(EWrapper):
                         send_email("重新连接成功",
                                    "client 信息: host:{}, port:{}, client_id:{}".
                                    format(self.cli.host, self.cli.port, self.cli.clientId))
+                        # 重新订阅
+                        if self.tick_subscriber:
+                            if isinstance(self.tick_subscriber, IBTick):
+                                self.tick_subscriber.re_connected()
 
                 time.sleep(10)
 
@@ -300,8 +314,11 @@ class IBClient(EWrapper):
         key = "{}_{}_{}".format(host, port, client_id)
         cls.clients_map[key] = cli
 
-    def sub(self, subscriber: EWrapper):
-        self.subscriber = subscriber
+    def sub(self, account_subscriber: EWrapper = None, tick_subscriber: EWrapper = None):
+        if account_subscriber:
+            self.account_subscriber = account_subscriber
+        if tick_subscriber:
+            self.tick_subscriber = tick_subscriber
 
 
 class IBAccount(AbstractAccount, EWrapper):
@@ -323,12 +340,13 @@ class IBAccount(AbstractAccount, EWrapper):
             order = self.ib_order_id_to_order[execution.orderId]
             idx = exec_id.rindex('.')
             real_exec_id = exec_id[:idx]
-            version = exec_id[idx+1:]
+            version = exec_id[idx + 1:]
             # 佣金等与佣金减去返佣
             the_commisson = commission.commission
-            order_execution = OrderExecution(real_exec_id, int(version), the_commisson, execution.shares, execution.avgPrice,
-                                Timestamp(execution.time, tz='Asia/Shanghai'),
-                                Timestamp(execution.time, tz='Asia/Shanghai'), order.direction)
+            order_execution = OrderExecution(real_exec_id, int(version), the_commisson, execution.shares,
+                                             execution.avgPrice,
+                                             Timestamp(execution.time, tz='Asia/Shanghai'),
+                                             Timestamp(execution.time, tz='Asia/Shanghai'), order.direction)
             self.order_filled(order, order_execution)
 
     def execDetailsEnd(self, reqId: int):
@@ -473,6 +491,12 @@ class IBAccount(AbstractAccount, EWrapper):
 
 class IBMinBar(TimeSeriesFunction):
 
+    def do_sub(self, codes: List[str]):
+        raise NotImplementedError
+
+    def do_unsub(self, codes):
+        raise NotImplementedError
+
     def __init__(self, host, port, client_id):
         super().__init__()
 
@@ -501,16 +525,7 @@ class IBMinBar(TimeSeriesFunction):
 
         return all_ts_datas
 
-    def current_price(self, codes) -> Mapping[str, Price]:
-        raise RuntimeError("not supported")
-
     def load_assets(self) -> List[Asset]:
-        pass
-
-    def sub_func(self, subscription: Subscription):
-        pass
-
-    def unsub_func(self, subscription: Subscription):
         pass
 
     def columns(self) -> List[Column]:
@@ -520,7 +535,33 @@ class IBMinBar(TimeSeriesFunction):
         return columns
 
 
-class IBTick(TimeSeriesFunction):
+class IBTick(TimeSeriesFunction, EWrapper):
+
+    def tickByTickAllLast(self, reqId: int, tickType: int, time: int, price: float, size: int,
+                          tickAttribLast: TickAttribLast, exchange: str, specialConditions: str):
+        code = Request.find(reqId).code
+        if code not in self.sub_map or len(self.sub_map[code]) <= 0:
+            logging.warning("该tick数据没有订阅者, code:{}".format(code))
+        for sub in self.sub_map[code]:
+            visible_time = Timestamp(time, unit='s', tz='Asia/Shanghai')
+            tick = Tick(self.name(), visible_time, code, price, size)
+            sub.on_data(tick)
+
+    def do_sub(self, codes: List[str]):
+        for code in codes:
+            contract: Contract = self.client.code_to_contract(code)
+            req = Request.new_request()
+            self.client.cli.reqTickByTickData(req.req_id, contract, "AllLast", 0, False)
+            self.code_to_req[code] = req
+            req.code = code
+
+    def do_unsub(self, codes):
+        for code in codes:
+            req_id = self.code_to_req[code].req_id
+            self.client.cli.cancelTickByTickData(req_id)
+            Request.clear(req_id)
+
+
 
     def __init__(self, host, port, client_id):
         super().__init__()
@@ -529,7 +570,9 @@ class IBTick(TimeSeriesFunction):
         if not cli:
             cli = IBClient(host, port, client_id)
             IBClient.registry(host, port, client_id, cli)
+        cli.sub(tick_subscriber=self)
         self.client = cli
+        self.code_to_req: Mapping[str, Request] = {}
 
     def name(self) -> str:
         return "ibTick"
@@ -552,25 +595,20 @@ class IBTick(TimeSeriesFunction):
 
         return all_ts_datas
 
-    def current_price(self, codes) -> Mapping[str, Price]:
-        if len(codes) <= 0:
-            raise RuntimeError("非法的codes")
-        command = HistoryDataQueryCommand(start=None, end=Timestamp.now(tz='Asia/Shanghai'), codes=codes, window=1)
-        code_to_ticks = self.client.req_tick(command)
-        cp: Mapping[str, Price] = {}
-        for code in code_to_ticks.keys():
-            tick = code_to_ticks[code][-1]
-            cp[code] = Price(code, tick.price, Timestamp(tick.time, unit='s', tz='Asia/Shanghai'))
-
-        return cp
+    # def current_price(self, codes) -> Mapping[str, Price]:
+    #     if len(codes) <= 0:
+    #         raise RuntimeError("非法的codes")
+    #     command = HistoryDataQueryCommand(start=None, end=Timestamp.now(tz='Asia/Shanghai'), codes=codes, window=1)
+    #     code_to_ticks = self.client.req_tick(command)
+    #     cp: Mapping[str, Price] = {}
+    #     for code in code_to_ticks.keys():
+    #         tick = code_to_ticks[code][-1]
+    #         cp[code] = Price(code, tick.price, Timestamp(tick.time, unit='s', tz='Asia/Shanghai'))
+    #
+    #     return cp
 
     def load_assets(self) -> List[Asset]:
-        pass
-
-    def sub_func(self, subscription: Subscription):
-        pass
-
-    def unsub_func(self, subscription: Subscription):
+        self.client.cli.reqTickByTickData()
         pass
 
     def columns(self) -> List[Column]:
@@ -578,3 +616,11 @@ class IBTick(TimeSeriesFunction):
                    Column("size", float, None, None, None), Column("exchange", str, None, None, None),
                    Column("specialConditions", str, None, None, None), Column("tickAttribs", str, None, None, None)]
         return columns
+
+    def re_connected(self):
+        if len(self.sub_codes) > 0:
+            logging.info("重新订阅，codes:{}".format(self.sub_codes))
+            self.do_sub(self.sub_codes)
+
+
+        pass
