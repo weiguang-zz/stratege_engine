@@ -433,11 +433,13 @@ class IBAccount(AbstractAccount, EWrapper):
                 if len(self.get_open_orders()) > 0:
                     logging.info("开始同步订单的执行详情")
                     req = Request.new_request()
-                    self.cli.cli.reqExecutions(req.req_id, ExecutionFilter())
+                    exec_filter = ExecutionFilter()
+                    exec_filter.clientId = self.cli.cli.clientId
+                    self.cli.cli.reqExecutions(req.req_id, exec_filter)
                 time.sleep(30)
 
         threading.Thread(name="account_save", target=save).start()
-        # threading.Thread(name="sync_order_executions", target=sync_order_executions).start()
+        threading.Thread(name="sync_order_executions", target=sync_order_executions).start()
 
     def with_client(self, host, port, client_id):
         cli: IBClient = IBClient.find_client(host, port, client_id)
