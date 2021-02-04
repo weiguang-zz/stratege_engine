@@ -18,6 +18,7 @@ from ibapi.order_condition import OrderCondition, PriceCondition
 from ibapi.wrapper import EWrapper
 from pandas import Timedelta
 from pandas import Timestamp
+import math
 
 from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MKTOrder, OrderDirection, LimitOrder, \
     DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution, Operation, OrderStatus
@@ -181,11 +182,12 @@ class IBClient(EWrapper):
 
         threading.Thread(name="ib_ping", target=ping).start()
 
-    def _req_history_data(self, code: str, end_date_time: Timestamp, duration_str, bar_size, what_to_show,
-                          use_rth: int, format_date: int, keep_up_to_date, char_options) -> List[BarData]:
+    def req_history_data(self, code: str, end_date_time: Timestamp, duration_str, bar_size, what_to_show,
+                         use_rth: int, format_date: int, keep_up_to_date, char_options) -> List[BarData]:
         req = Request.new_request()
         contract = self.code_to_contract(code)
-        self.cli.reqHistoricalData(req.req_id, contract, end_date_time.strftime("%Y%m%d %H:%M:%S"),
+        self.cli.reqHistoricalData(req.req_id, contract,
+                                   end_date_time.strftime("%Y%m%d %H:%M:%S") if end_date_time else "",
                                    duration_str, bar_size,
                                    what_to_show, use_rth, format_date, keep_up_to_date, char_options)
         if req.condition.acquire():
@@ -195,7 +197,8 @@ class IBClient(EWrapper):
         resp = req.resp
         # 清理数据
         Request.clear(req.req_id)
-        return resp
+        # 返回排好序的数据
+        return sorted(resp, key=lambda bar: bar.date)
 
     def _req_history_ticks(self, code: str, start: Timestamp, end: Timestamp, nums: int, what_to_show: str,
                            use_rth: int,
@@ -220,11 +223,11 @@ class IBClient(EWrapper):
             bars: List[BarData] = []
             batch_end = command.end
             while True:
-                batch_bars = self._req_history_data(code, end_date_time=batch_end, duration_str="86400 S",
-                                                    bar_size='1 min',
-                                                    what_to_show='TRADES', use_rth=1, format_date=1,
-                                                    keep_up_to_date=False,
-                                                    char_options=None)
+                batch_bars = self.req_history_data(code, end_date_time=batch_end, duration_str="86400 S",
+                                                   bar_size='1 min',
+                                                   what_to_show='TRADES', use_rth=1, format_date=1,
+                                                   keep_up_to_date=False,
+                                                   char_options=None)
                 bars.extend(batch_bars[::-1])
                 if command.start and command.end:
                     # 检查start时间
@@ -424,9 +427,15 @@ class IBAccount(AbstractAccount, EWrapper):
         # 启动账户保存线程，每隔半小时会保存当前账户的操作数据
         def save():
             while True:
-                logging.info("开始保存账户数据")
-                self.save()
-                time.sleep(30 * 60)
+                try:
+                    logging.info("开始保存账户数据")
+                    self.save()
+                    time.sleep(30 * 60)
+                except:
+                    import traceback
+                    err_msg = "保存账户失败:{}".format(traceback.format_exc())
+                    logging.error(err_msg)
+                    send_email("保存账户失败", err_msg)
 
         # 启动订单同步线程，避免因为没有收到消息导致账户状态不一致
         def sync_order_executions():
@@ -564,8 +573,6 @@ class IBTick(TimeSeriesFunction, EWrapper):
             self.client.cli.cancelTickByTickData(req_id)
             Request.clear(req_id)
 
-
-
     def __init__(self, host, port, client_id):
         super().__init__()
 
@@ -598,20 +605,7 @@ class IBTick(TimeSeriesFunction, EWrapper):
 
         return all_ts_datas
 
-    # def current_price(self, codes) -> Mapping[str, Price]:
-    #     if len(codes) <= 0:
-    #         raise RuntimeError("非法的codes")
-    #     command = HistoryDataQueryCommand(start=None, end=Timestamp.now(tz='Asia/Shanghai'), codes=codes, window=1)
-    #     code_to_ticks = self.client.req_tick(command)
-    #     cp: Mapping[str, Price] = {}
-    #     for code in code_to_ticks.keys():
-    #         tick = code_to_ticks[code][-1]
-    #         cp[code] = Price(code, tick.price, Timestamp(tick.time, unit='s', tz='Asia/Shanghai'))
-    #
-    #     return cp
-
     def load_assets(self) -> List[Asset]:
-        self.client.cli.reqTickByTickData()
         pass
 
     def columns(self) -> List[Column]:
@@ -626,4 +620,59 @@ class IBTick(TimeSeriesFunction, EWrapper):
             self.do_sub(self.sub_codes)
 
 
-        pass
+class IBAdjustedDailyBar(TimeSeriesFunction):
+
+    def name(self) -> str:
+        return "ibAdjustedDailyBar"
+
+    def should_cache(self):
+        return False
+
+    def load_history_data(self, command: HistoryDataQueryCommand) -> List[TSData]:
+        if not command.calendar:
+            raise RuntimeError("need calendar")
+        if not command.start:
+            years = math.ceil(command.window / 250)
+            command.start = command.end - Timedelta(years=years)
+
+        ys = math.ceil((Timestamp.now(tz='Asia/Shanghai') - command.start).days / 365)
+        total_ts_data: List[TSData] = []
+
+        for code in command.codes:
+            # 返回的bar的日期，是收盘时刻对应的UTC标准时间的日期部分
+            bars: List[BarData] = self.client.req_history_data(code, None, "{} Y".format(ys), "1 day",
+                                                               "ADJUSTED_LAST", 1, 1, False, None)
+            for bar in bars:
+                dt = Timestamp(bar.date, tz='UTC')
+                visible_time = command.calendar.next_close(dt).tz_convert('Asia/Shanghai')
+                start_time = (command.calendar.previous_open(visible_time) - Timedelta(minutes=1)).tz_convert('Asia/Shanghai')
+                provider_data = {"start_time": start_time, "open": bar.open, "high": bar.high, "low": bar.low,
+                                 "close": bar.close, "volume": bar.volume}
+                ts_data = TSData(self.name(), visible_time, code, self.parse(provider_data))
+                total_ts_data.append(ts_data)
+
+        return total_ts_data
+
+    def load_assets(self) -> List[Asset]:
+        raise RuntimeError("not supported")
+
+    def do_sub(self, codes: List[str]):
+        raise NotImplementedError
+
+    def do_unsub(self, codes):
+        raise NotImplementedError
+
+    def columns(self) -> List[Column]:
+        columns = [Column("start_time", Timestamp, None, None, None), Column("open", float, None, None, None),
+                   Column("high", float, None, None, None), Column("low", float, None, None, None),
+                   Column("close", float, None, None, None), Column("volume", int, None, None, None)]
+        return columns
+
+    def __init__(self, host, port, client_id):
+        super().__init__()
+
+        cli = IBClient.find_client(host, port, client_id)
+        if not cli:
+            cli = IBClient(host, port, client_id)
+            IBClient.registry(host, port, client_id, cli)
+        self.client = cli

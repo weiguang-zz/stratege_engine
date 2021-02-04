@@ -103,7 +103,7 @@ class AccountRepoImpl(AccountRepo):
                                                  attributes=execution.attributes)
             execution_model_map[exec_id] = exec_model
 
-        kwargs = order.__dict__
+        kwargs = order.__dict__.copy()
         kwargs.update({"direction": order.direction.value, "status": order.status.value,
                        "execution_map": execution_model_map})
         if isinstance(order, CrossMKTOrder):
