@@ -157,26 +157,30 @@ class IBClient(EWrapper):
         def ping():
             retry_count = 0
             while True:
-                if cli.connState != EClient.CONNECTED or not cli.reader.is_alive():
-                    retry_count += 1
-                    if retry_count % 60 == 1:
-                        # 每隔10分钟进行邮件提醒
-                        logging.info("发送邮件通知")
-                        send_email("连接断开，将会尝试重新连接",
-                                   "client 信息: host:{}, port:{}, client_id:{}".
-                                   format(self.cli.host, self.cli.port, self.cli.clientId))
-                    logging.info("尝试重新连接")
-                    try_connect()
-                    if cli.connState == EClient.CONNECTED and cli.reader.is_alive():
-                        retry_count = 0
-                        logging.info("重新连接成功，发送邮件通知")
-                        send_email("重新连接成功",
-                                   "client 信息: host:{}, port:{}, client_id:{}".
-                                   format(self.cli.host, self.cli.port, self.cli.clientId))
-                        # 重新订阅
-                        if self.tick_subscriber:
-                            if isinstance(self.tick_subscriber, IBTick):
-                                self.tick_subscriber.re_connected()
+                try:
+                    if cli.connState != EClient.CONNECTED or not cli.reader.is_alive():
+                        retry_count += 1
+                        if retry_count % 60 == 1:
+                            # 每隔10分钟进行邮件提醒
+                            logging.info("发送邮件通知")
+                            send_email("连接断开，将会尝试重新连接",
+                                       "client 信息: host:{}, port:{}, client_id:{}".
+                                       format(self.cli.host, self.cli.port, self.cli.clientId))
+                        logging.info("尝试重新连接")
+                        try_connect()
+                        if cli.connState == EClient.CONNECTED and cli.reader.is_alive():
+                            retry_count = 0
+                            logging.info("重新连接成功，发送邮件通知")
+                            send_email("重新连接成功",
+                                       "client 信息: host:{}, port:{}, client_id:{}".
+                                       format(self.cli.host, self.cli.port, self.cli.clientId))
+                            # 重新订阅
+                            if self.tick_subscriber:
+                                if isinstance(self.tick_subscriber, IBTick):
+                                    self.tick_subscriber.re_connected()
+                except:
+                    import traceback
+                    logging.error("{}".format(traceback.format_exc()))
 
                 time.sleep(10)
 
@@ -645,7 +649,8 @@ class IBAdjustedDailyBar(TimeSeriesFunction):
             for bar in bars:
                 dt = Timestamp(bar.date, tz='UTC')
                 visible_time = command.calendar.next_close(dt).tz_convert('Asia/Shanghai')
-                start_time = (command.calendar.previous_open(visible_time) - Timedelta(minutes=1)).tz_convert('Asia/Shanghai')
+                start_time = (command.calendar.previous_open(visible_time) - Timedelta(minutes=1)).tz_convert(
+                    'Asia/Shanghai')
                 provider_data = {"start_time": start_time, "open": bar.open, "high": bar.high, "low": bar.low,
                                  "close": bar.close, "volume": bar.volume}
                 ts_data = TSData(self.name(), visible_time, code, self.parse(provider_data))
