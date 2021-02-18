@@ -51,15 +51,15 @@ from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber,
 # print("done")
 
 
-# ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
-# ts: TimeSeries = ts_repo.find_one("ibAdjustedDailyBar")
-# start = Timestamp("2010-01-01", tz='Asia/Shanghai')
-# end = Timestamp("2020-01-10", tz='Asia/Shanghai')
-# command = HistoryDataQueryCommand(start, end, ['CCL_STK_USD_SMART'])
-# from trading_calendars import get_calendar
-# command.with_calendar(get_calendar("NYSE"))
-# df = ts.history_data(command, from_local=False)
-# print("done")
+ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+ts: TimeSeries = ts_repo.find_one("ibTick")
+start = Timestamp("2021-02-09 22:30:00", tz='Asia/Shanghai')
+end = Timestamp("2021-02-09 22:40:00", tz='Asia/Shanghai')
+command = HistoryDataQueryCommand(start, end, ['GSX_STK_USD_SMART'])
+from trading_calendars import get_calendar
+command.with_calendar(get_calendar("NYSE"))
+df = ts.history_data(command, from_local=False)
+print("done")
 
 # engine = Engine()
 # scope = Scope(["GSX_STK_USD_SMART"], trading_calendar=get_calendar("NYSE"))
@@ -80,22 +80,22 @@ from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber,
 # end = pd.Timestamp("2021-02-01", tz='Asia/Shanghai')
 # result = engine.run_backtest(strategy, start, end, 10000, "test203", 'ibAdjustedDailyBar')
 # print("done")
-from se import config
-try:
-    # 登录
-    smtp = SMTP_SSL(config.get('email', 'host_server'))
-    smtp.set_debuglevel(0)
-    smtp.ehlo(config.get('email', 'host_server'))
-    smtp.login(config.get('email', 'username'), config.get('email', 'password'))
-
-    sender_email = config.get('email', 'sender_email')
-    receiver = config.get('email', 'receiver')
-    msg = MIMEText("'status': <OrderStatus.CREATED: 'CREATED'>", "plain", 'utf-8')
-    msg["Subject"] = Header("hahaha", 'utf-8')
-    msg["From"] = sender_email
-    msg["To"] = receiver
-    smtp.sendmail(sender_email, receiver, msg.as_string())
-    smtp.quit()
-    print("done")
-except:
-    import traceback
+# from se import config
+# try:
+#     # 登录
+#     smtp = SMTP_SSL(config.get('email', 'host_server'))
+#     smtp.set_debuglevel(0)
+#     smtp.ehlo(config.get('email', 'host_server'))
+#     smtp.login(config.get('email', 'username'), config.get('email', 'password'))
+#
+#     sender_email = config.get('email', 'sender_email')
+#     receiver = config.get('email', 'receiver')
+#     msg = MIMEText("'status': <OrderStatus.CREATED: 'CREATED'>", "plain", 'utf-8')
+#     msg["Subject"] = Header("hahaha", 'utf-8')
+#     msg["From"] = sender_email
+#     msg["To"] = receiver
+#     smtp.sendmail(sender_email, receiver, msg.as_string())
+#     smtp.quit()
+#     print("done")
+# except:
+#     import traceback

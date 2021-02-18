@@ -1,10 +1,8 @@
-from configparser import ConfigParser
-
 from trading_calendars import get_calendar
 
+from se import config, BeanContainer, AccountRepo
 from se.domain2.engine.engine import Engine, Scope
 from se.infras.ib import IBAccount
-from se import config, BeanContainer, AccountRepo
 from strategies.strategy import TestStrategy2
 
 engine = Engine()

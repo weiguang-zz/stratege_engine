@@ -7,3 +7,4 @@ pinject
 jupyter
 cassandra-driver
 PyYAML
+scipy
