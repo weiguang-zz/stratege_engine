@@ -13,7 +13,7 @@ account_name = "ib_real2"
 repo: AccountRepo = BeanContainer.getBean(AccountRepo)
 acc = repo.find_one(account_name)
 if not acc:
-    acc = IBAccount(account_name, 1000)
+    acc = IBAccount(account_name, 10000)
 
 acc.with_order_callback(strategy).with_client(config.get('ib_account', 'host'), config.getint('ib_account', 'port'),
                                               config.getint('ib_account', 'client_id'))
