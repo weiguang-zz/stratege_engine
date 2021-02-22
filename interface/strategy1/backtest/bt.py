@@ -17,10 +17,10 @@ scope = Scope(["SPCE_STK_USD_SMART"], trading_calendar=get_calendar("NYSE"))
 strategy = TestStrategy2(scope)
 
 # 回测
-# start = pd.Timestamp("2020-01-01", tz='Asia/Shanghai')
-# end = pd.Timestamp("2020-12-01", tz='Asia/Shanghai')
-# result = engine.run_backtest(strategy, start, end, 10000, "test56", "ibMinBar")
-# print("done")
+start = pd.Timestamp("2021-02-01", tz='Asia/Shanghai')
+end = pd.Timestamp("2021-02-18", tz='Asia/Shanghai')
+result = engine.run_backtest(strategy, start, end, 10000, "test60", "ibAdjustedDailyBar")
+print("done")
 
 # 查看结果
 # repo: AccountRepo = BeanContainer.getBean(AccountRepo)

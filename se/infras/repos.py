@@ -30,7 +30,7 @@ class AccountRepoImpl(AccountRepo):
         account.cash = account_model.cash
         account.initial_cash = account_model.initial_cash
         account.positions = account_model.positions
-        account.history_net_value = {Timestamp(dt, tz='Asia/Shanghai'): account_model.history_net_value[dt]
+        account.history_net_value = {self._to_timestamp(dt): account_model.history_net_value[dt]
                                      for dt in account_model.history_net_value}
         account.orders = [self._to_order(om) for om in account_model.orders]
         # account.current_operation = self._to_operation(account_model.current_operation)

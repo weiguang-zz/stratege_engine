@@ -172,19 +172,20 @@ class EventProducer(TimeSeriesSubscriber):
             market_closes = market_closes[(market_closes >= start) & (market_closes <= end)]
 
             for ed in self.data_event_definitions:
-
                 ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ed.ts_type_name)
                 command = HistoryDataQueryCommand(start, end, scope.codes)
+                command.with_calendar(scope.trading_calendar)
                 df = ts.history_data(command, from_local=True)
                 for (visible_time, code), values in df.iterrows():
                     data: Dict = values.to_dict()
-                    data['visible_time'] = visible_time
-                    data['code'] = code
-
                     if ed.event_data_type == EventDataType.BAR:
                         # 添加bar事件
-                        data['start_time'] = data['date']
-                        bar = Bar(ed.ts_type_name, visible_time, code, data['date'], data['open'], data['high'],
+                        if "start_time" in data:
+                            start_time = data['start_time']
+                        else:
+                            start_time = data['date']
+
+                        bar = Bar(ed.ts_type_name, visible_time, code, start_time, data['open'], data['high'],
                                   data['low'], data['close'], data['volume'])
                         total_events.append(Event(ed, visible_time, bar))
                         if ed.bar_config.market_open_as_tick and not ed.bar_config.bar_open_as_tick:

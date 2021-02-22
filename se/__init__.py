@@ -8,7 +8,7 @@ from cassandra.cqlengine import connection
 from se.domain2.account.account import AccountRepo
 from se.domain2.domain import BeanContainer
 from se.domain2.time_series.time_series import TSFunctionRegistry, TimeSeriesRepo
-from se.infras.ib import IBMinBar, IBTick
+from se.infras.ib import IBMinBar, IBTick, IBAdjustedDailyBar
 from se.infras.repos import TimeSeriesRepoImpl, AccountRepoImpl
 
 BeanContainer.register(TimeSeriesRepo, TimeSeriesRepoImpl())
@@ -50,3 +50,5 @@ TSFunctionRegistry.register(IBMinBar(config.get("ib_data", "host"), config.getin
                                      config.getint('ib_data', 'client_id')))
 TSFunctionRegistry.register(IBTick(config.get("ib_data", "host"), config.getint("ib_data", 'port'),
                                    config.getint('ib_data', 'client_id')))
+TSFunctionRegistry.register(IBAdjustedDailyBar(config.get("ib_data", "host"), config.getint("ib_data", 'port'),
+                                               config.getint('ib_data', 'client_id')))

@@ -28,6 +28,7 @@ def send_email(title: str, content: str):
         smtp.ehlo(config.get('email', 'host_server'))
         smtp.login(config.get('email', 'username'), config.get('email', 'password'))
 
+        title = '[{}]{}'.format(config.get("ib_account", "name"), title)
         sender_email = config.get('email', 'sender_email')
         receiver = config.get('email', 'receiver')
         msg = MIMEText(content, "plain", 'utf-8')

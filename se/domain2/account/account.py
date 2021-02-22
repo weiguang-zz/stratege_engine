@@ -55,7 +55,7 @@ class OrderExecution(object):
 
 class Order(metaclass=ABCMeta):
 
-    def __init__(self, code, direction, quantity, place_time):
+    def __init__(self, code, direction, quantity, place_time, quantity_split: List[int] = None):
         self.code = code
         self.direction = direction
         self.quantity = quantity
@@ -67,6 +67,8 @@ class Order(metaclass=ABCMeta):
         self.filled_avg_price = 0
         self.fee = 0
         self.execution_map = {}
+        self.quantity_split = quantity_split
+
 
     @abstractmethod
     def bar_match(self, bar: Bar) -> OrderExecution:
@@ -171,14 +173,14 @@ class MKTOrder(Order):
         return OrderExecution(str(uuid.uuid1()), 0, 0, self.quantity, tick.price,
                               tick.visible_time, tick.visible_time, self.direction)
 
-    def __init__(self, code, direction, quantity, place_time):
-        super().__init__(code, direction, quantity, place_time)
+    def __init__(self, code, direction, quantity, place_time, quantity_split: List[int] = None):
+        super().__init__(code, direction, quantity, place_time, quantity_split)
 
 
 class DelayMKTOrder(Order):
 
-    def __init__(self, code, direction, quantity, place_time, delay_time: Timedelta):
-        super().__init__(code, direction, quantity, place_time)
+    def __init__(self, code, direction, quantity, place_time, delay_time: Timedelta, quantity_split: List[int] = None):
+        super().__init__(code, direction, quantity, place_time, quantity_split)
         self.delay_time = delay_time
 
     def bar_match(self, bar: Bar):
@@ -199,8 +201,8 @@ class DelayMKTOrder(Order):
 
 class LimitOrder(Order):
 
-    def __init__(self, code, direction, quantity, place_time, limit_price):
-        super().__init__(code, direction, quantity, place_time)
+    def __init__(self, code, direction, quantity, place_time, limit_price, quantity_split: List[int] = None):
+        super().__init__(code, direction, quantity, place_time, quantity_split)
         # 价格调整到两位小数
         self.limit_price = round(limit_price, 2)
 
@@ -229,8 +231,9 @@ class LimitOrder(Order):
 
 class CrossMKTOrder(Order):
 
-    def __init__(self, code, direction, quantity, place_time, cross_direction: CrossDirection, cross_price):
-        super().__init__(code, direction, quantity, place_time)
+    def __init__(self, code, direction, quantity, place_time, cross_direction: CrossDirection, cross_price,
+                 quantity_split: List[int] = None):
+        super().__init__(code, direction, quantity, place_time, quantity_split)
         self.cross_direction = cross_direction
         self.cross_price = round(cross_price, 2)
 
@@ -480,7 +483,7 @@ class BacktestAccount(AbstractAccount):
                 #     self.history_operations.append(self.current_operation)
                 #     self.current_operation = next_operation
 
-                self.order_callback.order_status_change(o, self)
+                # self.order_callback.order_status_change(o, self)
 
     def place_order(self, order: Order):
         logging.info("下单：{}".format(str(order.__dict__)))

@@ -6,6 +6,8 @@ from abc import *
 import json
 import logging
 
+from trading_calendars import TradingCalendar
+
 from se.domain2.domain import BeanContainer
 
 
@@ -88,6 +90,10 @@ class HistoryDataQueryCommand(object):
         self.end = end
         self.codes = codes
         self.window = window
+        self.calendar: TradingCalendar = None
+
+    def with_calendar(self, trading_calendar: TradingCalendar):
+        self.calendar = trading_calendar
 
     def to_single_code_command(self):
         commands: List[SingleCodeQueryCommand] = []
@@ -187,6 +193,9 @@ class TimeSeriesFunction(metaclass=ABCMeta):
     @abstractmethod
     def name(self) -> str:
         pass
+
+    def should_cache(self):
+        return True
 
     @abstractmethod
     def load_history_data(self, command: HistoryDataQueryCommand) -> List[TSData]:
@@ -301,6 +310,9 @@ class TimeSeries(object):
         self.column_dict = column_dict
 
     def history_data(self, command: HistoryDataQueryCommand, from_local: bool = False) -> DataFrame:
+        if not self.func.should_cache() and from_local:
+            logging.warning("该时序类型不支持缓存，将从服务器获取")
+            from_local = False
         ts_data_list: List[TSData] = []
         if not from_local:
             ts_data_list = self.func.load_history_data(command)
@@ -328,19 +340,6 @@ class TimeSeries(object):
 
     def unsubscribe(self, subscriber: TimeSeriesSubscriber, codes: List[str]):
         self.func.unsub_func(subscriber, codes)
-
-    def on_data(self, data: TSData):
-        """
-        当从数据供应商获取到实时数据流时，该方法被回调
-        :param data:
-        :return:
-        """
-        if data.code not in self.sub_map:
-            logging.warning("收到了没有订阅的数据，将取消订阅:{}".format(str(data.__dict__)))
-            self.func.unsub_func([data.code])
-            return
-        for sub in self.sub_map[data.code]:
-            sub.on_data(data)
 
     def download_data(self, command: HistoryDataQueryCommand):
         increment_commands = []
