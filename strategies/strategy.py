@@ -5,6 +5,7 @@ from se.domain2.domain import send_email
 from se.domain2.engine.engine import AbstractStrategy, Engine, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
 import numpy as np
+from se.domain2.time_series.time_series import HistoryDataQueryCommand
 
 
 class TestStrategy2(AbstractStrategy):
@@ -14,7 +15,7 @@ class TestStrategy2(AbstractStrategy):
     交易标的： SPCE
     """
 
-    def do_initialize(self, engine: Engine):
+    def do_initialize(self, engine: Engine, data_portal: DataPortal):
         if engine.is_backtest:
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen())
@@ -23,8 +24,19 @@ class TestStrategy2(AbstractStrategy):
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-30))
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
+        # 初始化昨日开盘价和收盘价
         self.last_open = None
         self.last_close = None
+        command = HistoryDataQueryCommand(None, None, self.scope.codes, window=1)\
+            .with_calendar(trading_calendar=self.scope.trading_calendar)
+        df = data_portal.history_data("ibAdjustedDailyBar", command)
+        if len(df) >= 1:
+            self.last_open = df.iloc[-1]['open']
+            self.last_close = df.iloc[-1]['close']
+            logging.info("初始化数据成功，昨日开盘价:{}, 昨日收盘价:{}".format(self.last_open, self.last_close))
+        else:
+            raise RuntimeError("没有获取到昨日开盘价和收盘价")
+
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
@@ -139,7 +151,7 @@ class TestStrategy3(AbstractStrategy):
     交易标的： GSX
     """
 
-    def do_initialize(self, engine: Engine):
+    def do_initialize(self, engine: Engine, data_portal: DataPortal):
         if engine.is_backtest:
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen())
@@ -149,9 +161,18 @@ class TestStrategy3(AbstractStrategy):
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-30))
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
-        self.last_close_price = None
         self.is_backtest = engine.is_backtest
         self.code = self.scope.codes[0]
+        # 初始化昨日收盘价
+        self.last_close_price = None
+        command = HistoryDataQueryCommand(None, None, self.scope.codes, window=1) \
+            .with_calendar(trading_calendar=self.scope.trading_calendar)
+        df = data_portal.history_data("ibAdjustedDailyBar", command)
+        if len(df) >= 1:
+            self.last_close_price = df.iloc[-1]['close']
+            logging.info("初始化数据成功，昨日收盘价:{}".format(self.last_close_price))
+        else:
+            raise RuntimeError("没有获取到昨日开盘价和收盘价")
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0

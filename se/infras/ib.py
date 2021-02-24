@@ -635,11 +635,12 @@ class IBAdjustedDailyBar(TimeSeriesFunction):
     def load_history_data(self, command: HistoryDataQueryCommand) -> List[TSData]:
         if not command.calendar:
             raise RuntimeError("need calendar")
-        if not command.start:
-            years = math.ceil(command.window / 250)
-            command.start = command.end - Timedelta(years=years)
+        start = command.start
+        if not start:
+            weeks = math.ceil(command.window / 5)
+            start = command.end - Timedelta(weeks=weeks)
 
-        ys = math.ceil((Timestamp.now(tz='Asia/Shanghai') - command.start).days / 365)
+        ys = math.ceil((Timestamp.now(tz='Asia/Shanghai') - start).days / 365)
         total_ts_data: List[TSData] = []
 
         for code in command.codes:

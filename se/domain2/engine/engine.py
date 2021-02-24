@@ -302,8 +302,7 @@ class DataPortal(TimeSeriesSubscriber):
         else:
             raise RuntimeError(" wrong ts_data type")
 
-    def history_data(self, ts_type_name, codes, end, window):
-        command = HistoryDataQueryCommand(None, end, codes, window)
+    def history_data(self, ts_type_name, command: HistoryDataQueryCommand):
         ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ts_type_name)
         return ts.history_data(command)
 
@@ -356,12 +355,12 @@ class DataPortal(TimeSeriesSubscriber):
 class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
 
     @abstractmethod
-    def do_initialize(self, engine: Engine):
+    def do_initialize(self, engine: Engine, data_portal: DataPortal):
         pass
 
-    def initialize(self, engine: Engine):
+    def initialize(self, engine: Engine, data_portal: DataPortal):
         self.is_backtest = engine.is_backtest
-        self.do_initialize(engine)
+        self.do_initialize(engine, data_portal)
 
     def __init__(self, scope: Scope):
         self.scope = scope
@@ -453,7 +452,7 @@ class Engine(EventSubscriber):
         if not self.is_unique_account(account_name):
             raise RuntimeError("account name重复")
         data_portal = DataPortal(True, ts_type_name_for_match, self)
-        strategy.initialize(self)
+        strategy.initialize(self, data_portal)
         self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(minute_offset=30)),
                             calc_net_value)
         self.register_event(EventDefinition(ed_type=EventDefinitionType.DATA, ts_type_name=ts_type_name_for_match,
@@ -494,12 +493,12 @@ class Engine(EventSubscriber):
             if not mocked_events_generator or not mocked_current_prices:
                 raise RuntimeError("需要mocked_events_generator， mocked_current_prices")
 
-        strategy.initialize(self)
         self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(minute_offset=30)),
                             calc_net_value)
         self.account = account
         self.data_portal = DataPortal(False, "ibTick", subscribe_codes=strategy.scope.codes,
                                       mocked_current_prices=mocked_current_prices)
+        strategy.initialize(self, self.data_portal)
         if not mocked_events_generator:
             ep = EventProducer(self.event_definitions)
             ep.subscribe(self)

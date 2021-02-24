@@ -11,13 +11,13 @@ os.environ['config.dir'] = "/Users/zhang/PycharmProjects/strategy_engine_v2/inte
 if not os.path.exists("log"):
     os.makedirs("log")
 
-from interface.test.test_strategy import TestStrategy2
+from interface.test.test_strategy import TestStrategy3
 
 
 from ibapi.common import BarData
 from trading_calendars import get_calendar
 
-from se.domain2.engine.engine import Engine, Scope
+from se.domain2.engine.engine import Engine, Scope, DataPortal
 import pandas as pd
 
 from pandas._libs.tslibs.timestamps import Timestamp
@@ -111,3 +111,10 @@ from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber,
 # c.req_history_data("ACB_STK_USD_SMART", end, duration_str='1 Y', bar_size='1 day', what_to_show='TRADES', use_rth=1,
 #                    format_date=1, keep_up_to_date=False,
 #                    char_options=None)
+
+import trading_calendars
+dp = DataPortal(False, "ibTick", subscribe_codes=['SPCE_STK_USD_SMART'])
+command = HistoryDataQueryCommand(None, None, ['SPCE_STK_USD_SMART'], window=1)
+command.with_calendar(trading_calendar=trading_calendars.get_calendar("NYSE"))
+df = dp.history_data("ibAdjustedDailyBar", command)
+print("done")
