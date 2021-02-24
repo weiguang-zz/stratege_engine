@@ -27,13 +27,14 @@ class TestStrategy2(AbstractStrategy):
         # 初始化昨日开盘价和收盘价
         self.last_open = None
         self.last_close = None
-        command = HistoryDataQueryCommand(None, None, self.scope.codes, window=1)\
-            .with_calendar(trading_calendar=self.scope.trading_calendar)
+        command = HistoryDataQueryCommand(None, None, self.scope.codes, window=1)
+        command.with_calendar(trading_calendar=self.scope.trading_calendar)
         df = data_portal.history_data("ibAdjustedDailyBar", command)
         if len(df) >= 1:
             self.last_open = df.iloc[-1]['open']
             self.last_close = df.iloc[-1]['close']
-            logging.info("初始化数据成功，昨日开盘价:{}, 昨日收盘价:{}".format(self.last_open, self.last_close))
+            logging.info("初始化数据成功，昨日开盘价:{}, 昨日收盘价:{}, bar的开始时间:{}"
+                         .format(self.last_open, self.last_close, df.iloc[-1]['start_time']))
         else:
             raise RuntimeError("没有获取到昨日开盘价和收盘价")
 
@@ -165,12 +166,13 @@ class TestStrategy3(AbstractStrategy):
         self.code = self.scope.codes[0]
         # 初始化昨日收盘价
         self.last_close_price = None
-        command = HistoryDataQueryCommand(None, None, self.scope.codes, window=1) \
-            .with_calendar(trading_calendar=self.scope.trading_calendar)
+        command = HistoryDataQueryCommand(None, None, self.scope.codes, window=1)
+        command.with_calendar(trading_calendar=self.scope.trading_calendar)
         df = data_portal.history_data("ibAdjustedDailyBar", command)
         if len(df) >= 1:
             self.last_close_price = df.iloc[-1]['close']
-            logging.info("初始化数据成功，昨日收盘价:{}".format(self.last_close_price))
+            logging.info("初始化数据成功，昨日收盘价:{}, bar的开始时间为:{}".
+                         format(self.last_close_price, df.iloc[-1]['start_time']))
         else:
             raise RuntimeError("没有获取到昨日开盘价和收盘价")
 

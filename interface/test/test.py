@@ -112,9 +112,31 @@ from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber,
 #                    format_date=1, keep_up_to_date=False,
 #                    char_options=None)
 
-import trading_calendars
-dp = DataPortal(False, "ibTick", subscribe_codes=['SPCE_STK_USD_SMART'])
-command = HistoryDataQueryCommand(None, None, ['SPCE_STK_USD_SMART'], window=1)
-command.with_calendar(trading_calendar=trading_calendars.get_calendar("NYSE"))
-df = dp.history_data("ibAdjustedDailyBar", command)
-print("done")
+# import trading_calendars
+# dp = DataPortal(False, "ibTick", subscribe_codes=['SPCE_STK_USD_SMART'])
+# command = HistoryDataQueryCommand(None, None, ['SPCE_STK_USD_SMART'], window=1)
+# command.with_calendar(trading_calendar=trading_calendars.get_calendar("NYSE"))
+# df = dp.history_data("ibAdjustedDailyBar", command)
+# print("done")
+
+
+from trading_calendars import get_calendar
+
+from se import config, BeanContainer, AccountRepo
+from se.domain2.engine.engine import Engine, Scope
+from se.infras.ib import IBAccount
+from strategies.strategy import TestStrategy2
+
+engine = Engine()
+scope = Scope(["SPCE_STK_USD_SMART"], trading_calendar=get_calendar("NYSE"))
+strategy = TestStrategy2(scope)
+
+account_name = "ib_test1"
+repo: AccountRepo = BeanContainer.getBean(AccountRepo)
+acc = repo.find_one(account_name)
+if not acc:
+    acc = IBAccount(account_name, 10000)
+
+acc.with_order_callback(strategy).with_client(config.get('ib_account', 'host'), config.getint('ib_account', 'port'),
+                                              config.getint('ib_account', 'client_id'))
+engine.run(strategy, acc)
