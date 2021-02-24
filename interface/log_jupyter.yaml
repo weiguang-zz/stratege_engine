@@ -19,12 +19,11 @@ handlers:
     backupCount: 3
 loggers:
   ibapi:
-    # other configuration for logger 'foo.bar.baz'
     handlers: [file]
     level: INFO
     propagate: False
 root:
-    handlers: [console, file]
+    handlers: [file]
     level: INFO
 
 disable_existing_loggers: False

@@ -23,9 +23,7 @@ import pandas as pd
 from pandas._libs.tslibs.timestamps import Timestamp
 
 from se.domain2.account.account import LimitOrder, OrderDirection, MKTOrder
-from se.infras.ib import IBAccount
-
-
+from se.infras.ib import IBAccount, IBClient
 
 from se import BeanContainer, TimeSeriesRepo
 from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber, TSData, HistoryDataQueryCommand
@@ -72,15 +70,15 @@ from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber,
 # result = engine.run_backtest(strategy, start, end, 10000, "test201", 'ibAdjustedDailyBar')
 # print("done")
 
-engine = Engine()
-scope = Scope(["SPCE_STK_USD_SMART"], trading_calendar=get_calendar("NYSE"))
-strategy = TestStrategy2(scope)
-#
-# # 回测
-start = pd.Timestamp("2019-07-09", tz='Asia/Shanghai')
-end = pd.Timestamp("2021-02-18", tz='Asia/Shanghai')
-result = engine.run_backtest(strategy, start, end, 10000, "test210", 'ibAdjustedDailyBar')
-print("done")
+# engine = Engine()
+# scope = Scope(["SPCE_STK_USD_SMART"], trading_calendar=get_calendar("NYSE"))
+# strategy = TestStrategy2(scope)
+# #
+# # # 回测
+# start = pd.Timestamp("2019-07-09", tz='Asia/Shanghai')
+# end = pd.Timestamp("2021-02-18", tz='Asia/Shanghai')
+# result = engine.run_backtest(strategy, start, end, 10000, "test210", 'ibAdjustedDailyBar')
+# print("done")
 # from se import config
 # try:
 #     # 登录
@@ -106,3 +104,10 @@ print("done")
 # acc_repo: AccountRepo = BeanContainer.getBean(AccountRepo)
 # acc: AbstractAccount = acc_repo.find_one("test209")
 # pd.Series(acc.history_net_value)
+# start = pd.Timestamp("2019-02-09", tz='Asia/Shanghai')
+# end = pd.Timestamp("2019-02-18", tz='Asia/Shanghai')
+# command = HistoryDataQueryCommand(start, end, ['AAPL_STK_USD_ARCA'])
+# c = IBClient('172.16.0.102', 7496, '98')
+# c.req_history_data("ACB_STK_USD_SMART", end, duration_str='1 Y', bar_size='1 day', what_to_show='TRADES', use_rth=1,
+#                    format_date=1, keep_up_to_date=False,
+#                    char_options=None)
