@@ -197,6 +197,7 @@ class IBClient(EWrapper):
         if req.condition.acquire():
             req.condition.wait(20)
         if not req.resp:
+            self.cli.cancelHistoricalData(req.req_id)
             raise RuntimeError("获取数据超时或者没有获取到数据")
         resp = req.resp
         # 清理数据
