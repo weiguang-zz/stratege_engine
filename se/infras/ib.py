@@ -429,6 +429,7 @@ class IBAccount(AbstractAccount, EWrapper):
         self.execution_map: Mapping[str, Execution] = {}
         self.commission_map: Mapping[str, CommissionReport] = {}
 
+    def start_save_thread(self):
         # 启动账户保存线程，每隔半小时会保存当前账户的操作数据
         def save():
             while True:
@@ -441,7 +442,9 @@ class IBAccount(AbstractAccount, EWrapper):
                     err_msg = "保存账户失败:{}".format(traceback.format_exc())
                     logging.error(err_msg)
                     send_email("保存账户失败", err_msg)
+        threading.Thread(name="account_save", target=save).start()
 
+    def start_sync_order_executions_thread(self):
         # 启动订单同步线程，避免因为没有收到消息导致账户状态不一致
         def sync_order_executions():
             while True:
@@ -452,8 +455,6 @@ class IBAccount(AbstractAccount, EWrapper):
                     exec_filter.clientId = self.cli.cli.clientId
                     self.cli.cli.reqExecutions(req.req_id, exec_filter)
                 time.sleep(30)
-
-        threading.Thread(name="account_save", target=save).start()
         threading.Thread(name="sync_order_executions", target=sync_order_executions).start()
 
     def with_client(self, host, port, client_id):
