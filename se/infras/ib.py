@@ -476,7 +476,8 @@ class IBAccount(AbstractAccount, EWrapper):
         elif isinstance(order, LimitOrder):
             ib_order.orderType = "LMT"
             ib_order.totalQuantity = order.quantity
-            ib_order.lmtPrice = order.limit_price
+            # 价格调整到两位小数
+            ib_order.lmtPrice = round(order.limit_price, 2)
             ib_order.action = 'BUY' if order.direction == OrderDirection.BUY else 'SELL'
             ib_order.outsideRth = True
         else:
@@ -498,7 +499,7 @@ class IBAccount(AbstractAccount, EWrapper):
                 price_cond = order_condition.Create(OrderCondition.Price)
                 contract = self.cli.code_to_contract(order.code)
                 price_cond.conId = contract.conId
-                price_cond.price = order.cross_price
+                price_cond.price = round(order.cross_price, 2)
                 price_cond.isMore = True if order.cross_direction == CrossDirection.UP else False
                 price_cond.exchange = contract.exchange
                 price_cond.triggerMethod = PriceCondition.TriggerMethodEnum.Default

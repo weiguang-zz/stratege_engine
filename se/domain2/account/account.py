@@ -203,8 +203,7 @@ class LimitOrder(Order):
 
     def __init__(self, code, direction, quantity, place_time, limit_price, quantity_split: List[int] = None):
         super().__init__(code, direction, quantity, place_time, quantity_split)
-        # 价格调整到两位小数
-        self.limit_price = round(limit_price, 2)
+        self.limit_price = limit_price
 
     def bar_match(self, bar: Bar):
         if self.direction == OrderDirection.BUY:
@@ -235,7 +234,7 @@ class CrossMKTOrder(Order):
                  quantity_split: List[int] = None):
         super().__init__(code, direction, quantity, place_time, quantity_split)
         self.cross_direction = cross_direction
-        self.cross_price = round(cross_price, 2)
+        self.cross_price = cross_price
 
     def bar_match(self, bar: Bar):
         if self.cross_direction == CrossDirection.UP:
