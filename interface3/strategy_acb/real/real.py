@@ -6,7 +6,7 @@ from se.infras.ib import IBAccount
 from strategies.acb import ACBStrategy
 
 engine = Engine()
-scope = Scope(["ACB_STK_USD_ISLAND"], trading_calendar=get_calendar("NYSE"))
+scope = Scope(["ACB_STK_USD_SMART"], trading_calendar=get_calendar("NYSE"))
 strategy = ACBStrategy(scope)
 
 account_name = "ib_real_acb"
