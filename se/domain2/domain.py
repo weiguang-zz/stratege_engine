@@ -1,4 +1,5 @@
 import logging
+import threading
 from email.header import Header
 from email.mime.text import MIMEText
 from smtplib import SMTP_SSL
@@ -16,7 +17,16 @@ class BeanContainer(object):
     def register(cls, the_type: type, bean: object):
         cls.beans[the_type] = bean
 
+def synchronized(func):
+    func.__lock__ = threading.Lock()
 
+    def synced_func(*args, **kws):
+        with func.__lock__:
+            return func(*args, **kws)
+
+    return synced_func
+
+@synchronized
 def send_email(title: str, content: str):
     from se import config
     if config.get("email", 'activate') == 'false':
