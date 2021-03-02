@@ -671,6 +671,11 @@ class IBTick(TimeSeriesFunction, EWrapper):
                                         format(check_code, tick.__dict__, now)
                                     logging.error(err_msg)
                                     send_email("实时数据获取异常", err_msg)
+                                else:
+                                    logging.info("实时数据正常，{}的最新价格数据为：{}，当前时间:{}".
+                                                 format(check_code, tick.__dict__, now))
+                        else:
+                            logging.info("当前时间不是盘前交易时间段，不进行校验")
                     else:
                         logging.info("没有订阅美股数据，不需要监控实时数据")
                     time.sleep(10 * 60)
