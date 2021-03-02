@@ -439,25 +439,32 @@ class IBAccount(AbstractAccount, EWrapper):
                 try:
                     logging.info("开始保存账户数据")
                     self.save()
-                    time.sleep(30 * 60)
                 except:
                     import traceback
                     err_msg = "保存账户失败:{}".format(traceback.format_exc())
                     logging.error(err_msg)
                     send_email("保存账户失败", err_msg)
+                time.sleep(30 * 60)
         threading.Thread(name="account_save", target=save).start()
 
     def start_sync_order_executions_thread(self):
         # 启动订单同步线程，避免因为没有收到消息导致账户状态不一致
         def sync_order_executions():
             while True:
-                if len(self.get_open_orders()) > 0:
-                    logging.info("开始同步订单的执行详情")
-                    req = Request.new_request()
-                    exec_filter = ExecutionFilter()
-                    exec_filter.clientId = self.cli.cli.clientId
-                    self.cli.cli.reqExecutions(req.req_id, exec_filter)
+                try:
+                    if len(self.get_open_orders()) > 0:
+                        logging.info("开始同步订单的执行详情")
+                        req = Request.new_request()
+                        exec_filter = ExecutionFilter()
+                        exec_filter.clientId = self.cli.cli.clientId
+                        self.cli.cli.reqExecutions(req.req_id, exec_filter)
+                except:
+                    import traceback
+                    err_msg = "同步订单详情失败:{}".format(traceback.format_exc())
+                    logging.error(err_msg)
+                    send_email("同步订单详情失败", err_msg)
                 time.sleep(30)
+
         threading.Thread(name="sync_order_executions", target=sync_order_executions).start()
 
     def with_client(self, host, port, client_id):
