@@ -573,6 +573,7 @@ class IBTick(TimeSeriesFunction, EWrapper):
         self.lastest_tick[code] = Tick(self.name(), visible_time, code, price, size)
         if code not in self.sub_map or len(self.sub_map[code]) <= 0:
             logging.info("该tick数据没有订阅者, code:{}".format(code))
+            return
         for sub in self.sub_map[code]:
             tick = Tick(self.name(), visible_time, code, price, size)
             sub.on_data(tick)
@@ -639,7 +640,7 @@ class IBTick(TimeSeriesFunction, EWrapper):
             logging.info("重新订阅，codes:{}".format(self.sub_codes))
             self.do_sub(self.sub_codes)
 
-    def start_check_realtime_data_thread(self, check_code='AAPL_STK_USD_SMART', time_threshold=Timedelta(minutes=30)):
+    def start_check_realtime_data_thread(self, time_threshold=Timedelta(minutes=30)):
         """
         如果有订阅的话，会启动实时数据监控线程，监控逻辑是：如果当前时间是盘前交易时间段，看AAPL最近的价格数据的时间，如果其
         价格数据的时间跟当前时间间隔超过阀值， 则认为获取实时数据是有问题的，发送监控告警
@@ -652,38 +653,35 @@ class IBTick(TimeSeriesFunction, EWrapper):
                 try:
                     # 如果没有订阅美股资产实时数据的话，则忽略
                     if self.has_sub_us_asset():
-                        if check_code not in self.sub_codes:
-                            self.do_sub([check_code])
-                            self.sub_codes.extend(check_code)
-                            continue
                         now = Timestamp.now(tz='Asia/Shanghai')
                         next_open = us_calendar.next_open(now)
                         pre_open_start = next_open - pre_open_last
                         if (pre_open_start + time_threshold) < now < next_open:
-                            if check_code not in self.lastest_tick:
-                                err_msg = "实时数据获取异常,没有{}的最新价格数据，当前时间:{}".format(check_code, now)
-                                logging.error(err_msg)
-                                send_email("实时数据获取异常", err_msg)
-                            else:
-                                tick: Tick = self.lastest_tick[check_code]
-                                if (now - tick.visible_time) > time_threshold:
-                                    err_msg = "实时数据获取异常,{}的最新价格数据为：{}，当前时间:{}". \
-                                        format(check_code, tick.__dict__, now)
+                            for code in self.sub_codes:
+                                if code not in self.lastest_tick:
+                                    err_msg = "实时数据获取异常,没有{}的最新价格数据，当前时间:{}".format(code, now)
                                     logging.error(err_msg)
                                     send_email("实时数据获取异常", err_msg)
                                 else:
-                                    logging.info("实时数据正常，{}的最新价格数据为：{}，当前时间:{}".
-                                                 format(check_code, tick.__dict__, now))
+                                    tick: Tick = self.lastest_tick[code]
+                                    if (now - tick.visible_time) > time_threshold:
+                                        err_msg = "实时数据获取异常,{}的最新价格数据为：{}，当前时间:{}". \
+                                            format(code, tick.__dict__, now)
+                                        logging.error(err_msg)
+                                        send_email("实时数据获取异常", err_msg)
+                                    else:
+                                        logging.info("实时数据正常，{}的最新价格数据为：{}，当前时间:{}".
+                                                     format(code, tick.__dict__, now))
                         else:
                             logging.info("当前时间不是盘前交易时间段，不进行校验")
                     else:
                         logging.info("没有订阅美股数据，不需要监控实时数据")
-                    time.sleep(10 * 60)
                 except:
                     import traceback
                     err_msg = "监控实时数据失败:{}".format(traceback.format_exc())
                     logging.error(err_msg)
                     send_email("监控实时数据失败", err_msg)
+                time.sleep(10*60)
 
         threading.Thread(name="check_realtime_data", target=check_realtime_data).start()
 
