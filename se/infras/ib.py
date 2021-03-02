@@ -7,6 +7,7 @@ import time
 from threading import Condition
 from typing import *
 
+import trading_calendars
 from ibapi import order_condition
 from ibapi.client import EClient
 from ibapi.commission_report import CommissionReport
@@ -19,6 +20,8 @@ from ibapi.wrapper import EWrapper
 from pandas import Timedelta
 from pandas import Timestamp
 import math
+
+from trading_calendars import TradingCalendar
 
 from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MKTOrder, OrderDirection, LimitOrder, \
     DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution, Operation, OrderStatus
@@ -559,10 +562,11 @@ class IBTick(TimeSeriesFunction, EWrapper):
     def tickByTickAllLast(self, reqId: int, tickType: int, time: int, price: float, size: int,
                           tickAttribLast: TickAttribLast, exchange: str, specialConditions: str):
         code = Request.find(reqId).code
+        visible_time = Timestamp(time, unit='s', tz='Asia/Shanghai')
+        self.lastest_tick[code] = Tick(self.name(), visible_time, code, price, size)
         if code not in self.sub_map or len(self.sub_map[code]) <= 0:
-            logging.warning("该tick数据没有订阅者, code:{}".format(code))
+            logging.info("该tick数据没有订阅者, code:{}".format(code))
         for sub in self.sub_map[code]:
-            visible_time = Timestamp(time, unit='s', tz='Asia/Shanghai')
             tick = Tick(self.name(), visible_time, code, price, size)
             sub.on_data(tick)
 
@@ -590,6 +594,8 @@ class IBTick(TimeSeriesFunction, EWrapper):
         cli.sub(tick_subscriber=self)
         self.client = cli
         self.code_to_req: Mapping[str, Request] = {}
+        self.lastest_tick: Mapping[str, Tick] = {}
+        self.start_check_realtime_data_thread()
 
     def name(self) -> str:
         return "ibTick"
@@ -625,6 +631,57 @@ class IBTick(TimeSeriesFunction, EWrapper):
         if len(self.sub_codes) > 0:
             logging.info("重新订阅，codes:{}".format(self.sub_codes))
             self.do_sub(self.sub_codes)
+
+    def start_check_realtime_data_thread(self, check_code='AAPL_STK_USD_SMART', time_threshold=Timedelta(minutes=30)):
+        """
+        如果有订阅的话，会启动实时数据监控线程，监控逻辑是：如果当前时间是盘前交易时间段，看AAPL最近的价格数据的时间，如果其
+        价格数据的时间跟当前时间间隔超过阀值， 则认为获取实时数据是有问题的，发送监控告警
+        :return:
+        """
+        us_calendar: TradingCalendar = trading_calendars.get_calendar("NYSE")
+        pre_open_last = Timedelta(minutes=30, hours=5)
+        def check_realtime_data():
+            while True:
+                try:
+                    # 如果没有订阅美股资产实时数据的话，则忽略
+                    if self.has_sub_us_asset():
+                        if check_code not in self.sub_codes:
+                            self.do_sub([check_code])
+                            self.sub_codes.extend(check_code)
+                            continue
+                        now = Timestamp.now(tz='Asia/Shanghai')
+                        next_open = us_calendar.next_open(now)
+                        pre_open_start = next_open - pre_open_last
+                        if (pre_open_start + time_threshold) < now < next_open:
+                            if check_code not in self.lastest_tick:
+                                err_msg = "实时数据获取异常,没有{}的最新价格数据，当前时间:{}".format(check_code, now)
+                                logging.error(err_msg)
+                                send_email("实时数据获取异常", err_msg)
+                            else:
+                                tick: Tick = self.lastest_tick[check_code]
+                                if (now - tick.visible_time) > time_threshold:
+                                    err_msg = "实时数据获取异常,{}的最新价格数据为：{}，当前时间:{}". \
+                                        format(check_code, tick.__dict__, now)
+                                    logging.error(err_msg)
+                                    send_email("实时数据获取异常", err_msg)
+                    else:
+                        logging.info("没有订阅美股数据，不需要监控实时数据")
+                    time.sleep(10 * 60)
+                except:
+                    import traceback
+                    err_msg = "监控实时数据失败:{}".format(traceback.format_exc())
+                    logging.error(err_msg)
+                    send_email("监控实时数据失败", err_msg)
+
+        threading.Thread(name="check_realtime_data", target=check_realtime_data).start()
+
+
+    def has_sub_us_asset(self):
+        for code in self.sub_codes:
+            if "USD" in code:
+                return True
+        return False
+
 
 
 class IBAdjustedDailyBar(TimeSeriesFunction):
