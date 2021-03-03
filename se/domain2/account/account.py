@@ -25,6 +25,8 @@ class OrderStatus(Enum):
     CREATED = "CREATED"
     CANCELED = "CANCELED"
     FILLED = "FILLED"
+    FAILED = "FAILED"
+    PARTIAL_FILLED = "PARTIAL_FILLED"
 
 
 
@@ -82,24 +84,38 @@ class Order(metaclass=ABCMeta):
         if execution.id in self.execution_map:
             old_execution: OrderExecution = self.execution_map[execution.id]
             if execution.version > old_execution.version:
+                logging.info("订单执行被修订，老的执行详情:{}, 新的执行详情:{}".
+                             format(old_execution.__dict__, execution.__dict__))
                 self.reverse(old_execution)
                 self._order_filled(execution)
         else:
             self._order_filled(execution)
+        if self.filled_quantity > self.quantity or (self.filled_quantity < 0):
+            raise RuntimeError("wrong filled quantity")
+        elif self.filled_quantity == self.quantity:
+            if not self.filled_start_time:
+                self.filled_start_time = execution.filled_start_time
+            self.filled_end_time = execution.filled_end_time
+            self.status = OrderStatus.FILLED
+        elif self.filled_quantity > 0:
+            self.status = OrderStatus.PARTIAL_FILLED
+            if not self.filled_start_time:
+                self.filled_start_time = execution.filled_start_time
+        else:
+            # self.filled_quantity = 0
+            logging.warning("订单执行没有修改订单成交数量，订单执行:{}，订单:{}".format(execution.__dict__, self.__dict__))
 
     def _order_filled(self, execution: OrderExecution):
-        if not self.filled_start_time:
-            self.filled_start_time = execution.filled_start_time
 
         self.filled_avg_price = (execution.filled_avg_price * execution.filled_quantity +
                                  self.filled_quantity * self.filled_avg_price) / \
                                 (self.filled_quantity + execution.filled_quantity)
         self.filled_quantity += execution.filled_quantity
-        if self.filled_quantity > self.quantity:
-            raise RuntimeError("wrong filled quantity")
-        if self.filled_quantity == self.quantity:
-            self.filled_end_time = execution.filled_end_time
-            self.status = OrderStatus.FILLED
+        # if self.filled_quantity > self.quantity:
+        #     raise RuntimeError("wrong filled quantity")
+        # if self.filled_quantity == self.quantity:
+        #     self.filled_end_time = execution.filled_end_time
+        #     self.status = OrderStatus.FILLED
         self.fee += execution.commission
 
     def reverse(self, execution: OrderExecution):
@@ -107,12 +123,12 @@ class Order(metaclass=ABCMeta):
                                  execution.filled_quantity * execution.filled_avg_price) / \
                                 (self.quantity - execution.filled_quantity)
         self.filled_quantity = self.filled_quantity - execution.filled_quantity
-        if self.quantity == 0:
-            self.filled_start_time = None
-            self.filled_end_time = None
-
-        if self.filled_quantity < self.quantity:
-            self.status = OrderStatus.CREATED
+        # if self.quantity == 0:
+        #     self.filled_start_time = None
+        #     self.filled_end_time = None
+        #
+        # if self.filled_quantity < self.quantity:
+        #     self.status = OrderStatus.CREATED
         self.fee = self.fee - execution.commission
 
     # def order_filled(self, filled_quantity, filled_price, filled_start_time, filled_end_time):

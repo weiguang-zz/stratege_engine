@@ -1,6 +1,6 @@
 import logging
 
-from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder
+from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder, Order, OrderStatus
 from se.domain2.domain import send_email
 from se.domain2.engine.engine import AbstractStrategy, Engine, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
@@ -54,7 +54,7 @@ class ACBStrategy(AbstractStrategy):
         if not current_price:
             msg = "没有获取到当天的开盘价,code:{}".format(self.code)
             logging.error(msg)
-            send_email("ERROR", msg)
+            send_email("【系统】没有获取到最新价格", msg)
         else:
             net_value = account.net_value({self.code: current_price})
 
@@ -67,17 +67,17 @@ class ACBStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
-            else:
-                logging.warning("没有获取到当前价格，将会以市价单下单")
-                order = MKTOrder(self.code, direction, abs(change), event.visible_time)
+            # if current_price:
+            #     order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+            # else:
+            #     logging.warning("没有获取到当前价格，将会以市价单下单")
+            order = MKTOrder(self.code, direction, abs(change), event.visible_time)
             account.place_order(order)
             msg = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, 订单:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
                         current_price, order.__dict__)
             logging.info("开盘下单:{}".format(msg))
-            send_email('[订单]', msg)
+            send_email('【订单】下单', msg)
         else:
             msg = "不需要下单, 时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}". \
                 format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
@@ -95,7 +95,7 @@ class ACBStrategy(AbstractStrategy):
         if not current_price:
             msg = "没有获取到当前价格, code:{}".format(self.code)
             logging.error(msg)
-            send_email("ERROR", msg)
+            send_email("【系统】没有获取到最新价格", msg)
         else:
             net_value = account.net_value({self.code: current_price})
 
@@ -108,15 +108,15 @@ class ACBStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            quantity_split = None
-            if current_position != 0:
-                quantity_split = [-current_position, change + current_position]
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price=current_price,
-                                   quantity_split=quantity_split)
-            else:
-                logging.warning("没有获取到当前价格，将会以市价单下单")
-                order = MKTOrder(self.code, direction, abs(change), event.visible_time, quantity_split)
+            # quantity_split = None
+            # if current_position != 0:
+            #     quantity_split = [-current_position, change + current_position]
+            # if current_price:
+            #     order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price=current_price,
+            #                        quantity_split=quantity_split)
+            # else:
+            #     logging.warning("没有获取到当前价格，将会以市价单下单")
+            order = MKTOrder(self.code, direction, abs(change), event.visible_time)
             account.place_order(order)
             msg = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, 订单:{}".format(event.visible_time,
                                                                                       current_position,
@@ -124,7 +124,7 @@ class ACBStrategy(AbstractStrategy):
                                                                                       self.last_close,
                                                                                       current_price, order.__dict__)
             logging.info("收盘下单:{}".format(msg))
-            send_email("[订单]", msg)
+            send_email("【订单】下单", msg)
         else:
             logging.info("不需要下单, 时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 今日开盘价:{}, 今日收盘价:{}".
                          format(event.visible_time,
@@ -135,8 +135,9 @@ class ACBStrategy(AbstractStrategy):
 
         self.last_close = current_price
 
-    def order_status_change(self, order, account):
+    def order_status_change(self, order: Order, account):
         logging.info("订单状态变更, 订单状态:{}，账户持仓:{}, 账户现金:{}".
                      format(order.__dict__, account.positions, account.cash))
         msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
-        send_email("【订单】成交", str(msg))
+        title = "【订单】状态变更({})".format(order.status.value)
+        send_email(title, str(msg))

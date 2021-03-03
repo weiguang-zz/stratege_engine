@@ -16,6 +16,7 @@ from ibapi.contract import Contract, ContractDetails
 from ibapi.execution import Execution, ExecutionFilter
 from ibapi.order import Order as IBOrder
 from ibapi.order_condition import OrderCondition, PriceCondition
+from ibapi.tag_value import TagValue
 from ibapi.wrapper import EWrapper
 from pandas import Timedelta
 from pandas import Timestamp
@@ -166,7 +167,7 @@ class IBClient(EWrapper):
                         if retry_count % 60 == 1:
                             # 每隔10分钟进行邮件提醒
                             logging.info("发送邮件通知")
-                            send_email("连接断开，将会尝试重新连接",
+                            send_email("【系统】连接断开，将会尝试重新连接",
                                        "client 信息: host:{}, port:{}, client_id:{}".
                                        format(self.cli.host, self.cli.port, self.cli.clientId))
                         logging.info("尝试重新连接")
@@ -174,7 +175,7 @@ class IBClient(EWrapper):
                         if cli.connState == EClient.CONNECTED and cli.reader.is_alive():
                             retry_count = 0
                             logging.info("重新连接成功，发送邮件通知")
-                            send_email("重新连接成功",
+                            send_email("【系统】重新连接成功",
                                        "client 信息: host:{}, port:{}, client_id:{}".
                                        format(self.cli.host, self.cli.port, self.cli.clientId))
                             # 重新订阅
@@ -373,7 +374,17 @@ class IBAccount(AbstractAccount, EWrapper):
 
     def orderStatus(self, orderId: OrderId, status: str, filled: float, remaining: float, avgFillPrice: float,
                     permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
-        pass
+        if orderId not in self.ib_order_id_to_order:
+            logging.info("订单状态变更，但是该订单不是由该策略产生的订单，将会忽略, orderId:{}".format(orderId))
+            return
+        order: Order = self.ib_order_id_to_order[orderId]
+        # 下面只需要处理下单失败的情况，比如因为合约不可卖空导致的失败，这种情况需要将订单状态置为FAILED
+        if status == 'Inactive':
+            order.status = OrderStatus.FAILED
+            if self.order_callback:
+                self.order_callback.order_status_change(order, self)
+
+
         # if orderId not in self.ib_order_id_to_order:
         #     logging.warning("该订单不是由该策略产生的订单，将会忽略, orderId:{}".format(orderId))
         #     return
@@ -443,8 +454,9 @@ class IBAccount(AbstractAccount, EWrapper):
                     import traceback
                     err_msg = "保存账户失败:{}".format(traceback.format_exc())
                     logging.error(err_msg)
-                    send_email("保存账户失败", err_msg)
+                    send_email("【系统】保存账户失败", err_msg)
                 time.sleep(30 * 60)
+
         threading.Thread(name="account_save", target=save).start()
 
     def start_sync_order_executions_thread(self):
@@ -462,7 +474,7 @@ class IBAccount(AbstractAccount, EWrapper):
                     import traceback
                     err_msg = "同步订单详情失败:{}".format(traceback.format_exc())
                     logging.error(err_msg)
-                    send_email("同步订单详情失败", err_msg)
+                    send_email("【系统】同步订单详情失败", err_msg)
                 time.sleep(30)
 
         threading.Thread(name="sync_order_executions", target=sync_order_executions).start()
@@ -483,6 +495,9 @@ class IBAccount(AbstractAccount, EWrapper):
             ib_order.orderType = "MKT"
             ib_order.totalQuantity = order.quantity
             ib_order.action = 'BUY' if order.direction == OrderDirection.BUY else 'SELL'
+            # 设置自适应算法
+            ib_order.algoStrategy = 'Adaptive'
+            ib_order.algoParams = [TagValue("adaptivePriority", 'Normal')]
         elif isinstance(order, LimitOrder):
             ib_order.orderType = "LMT"
             ib_order.totalQuantity = order.quantity
@@ -648,6 +663,7 @@ class IBTick(TimeSeriesFunction, EWrapper):
         """
         us_calendar: TradingCalendar = trading_calendars.get_calendar("NYSE")
         pre_open_last = Timedelta(minutes=30, hours=5)
+
         def check_realtime_data():
             while True:
                 try:
@@ -661,14 +677,14 @@ class IBTick(TimeSeriesFunction, EWrapper):
                                 if code not in self.lastest_tick:
                                     err_msg = "实时数据获取异常,没有{}的最新价格数据，当前时间:{}".format(code, now)
                                     logging.error(err_msg)
-                                    send_email("实时数据获取异常", err_msg)
+                                    send_email("【系统】实时数据获取异常", err_msg)
                                 else:
                                     tick: Tick = self.lastest_tick[code]
                                     if (now - tick.visible_time) > time_threshold:
                                         err_msg = "实时数据获取异常,{}的最新价格数据为：{}，当前时间:{}". \
                                             format(code, tick.__dict__, now)
                                         logging.error(err_msg)
-                                        send_email("实时数据获取异常", err_msg)
+                                        send_email("【系统】实时数据获取异常", err_msg)
                                     else:
                                         logging.info("实时数据正常，{}的最新价格数据为：{}，当前时间:{}".
                                                      format(code, tick.__dict__, now))
@@ -680,18 +696,16 @@ class IBTick(TimeSeriesFunction, EWrapper):
                     import traceback
                     err_msg = "监控实时数据失败:{}".format(traceback.format_exc())
                     logging.error(err_msg)
-                    send_email("监控实时数据失败", err_msg)
-                time.sleep(10*60)
+                    send_email("【系统】监控实时数据失败", err_msg)
+                time.sleep(10 * 60)
 
         threading.Thread(name="check_realtime_data", target=check_realtime_data).start()
-
 
     def has_sub_us_asset(self):
         for code in self.sub_codes:
             if "USD" in code:
                 return True
         return False
-
 
 
 class IBAdjustedDailyBar(TimeSeriesFunction):
