@@ -1,4 +1,8 @@
 import logging
+import threading
+import time
+
+from pandas._libs.tslibs.timestamps import Timestamp
 
 from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder, OrderStatus
 from se.domain2.domain import send_email
@@ -21,7 +25,7 @@ class TestStrategy2(AbstractStrategy):
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen())
         else:
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen(second_offset=5))
-            market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-30))
+            market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-60))
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
         # 初始化昨日开盘价和收盘价
@@ -44,6 +48,52 @@ class TestStrategy2(AbstractStrategy):
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
+
+    def ensure_order_filled(self, account: AbstractAccount, data_portal: DataPortal, order: LimitOrder, period: int, retry_count: int):
+        """
+        将通过如下算法来保证订单一定成交：
+        每隔一定时间检查订单是否还未成交，如果是的话，则取消原来的订单，并且按照最新的价格下一个新的订单，同时监听新的订单
+        :param account:
+        :param order:
+        :param period:
+        :param retry_count:
+        :return:
+        """
+        def ensure():
+            try:
+                time.sleep(period)
+                if order.status == OrderStatus.CREATED or order.status == OrderStatus.PARTIAL_FILLED:
+                    account.cancel_open_order(order)
+                    remain_quantity = order.quantity - order.filled_quantity
+                    cp = data_portal.current_price([self.code], None)[self.code]
+                    new_quantity = int(remain_quantity * order.limit_price / cp.price)
+                    now = Timestamp.now(tz='Asia/Shanghai')
+                    if retry_count > 1:
+                        new_order = LimitOrder(order.code, order.direction, new_quantity,
+                                               now, cp.price)
+                    else:
+                        new_order = MKTOrder(order.code, order.direction, new_quantity, now)
+                    msg = "由于订单没有成交，取消了原来的订单，并且重新下单， 原来的订单:{}, 新的订单:{}".\
+                        format(order.__dict__, new_order.__dict__)
+                    logging.info(msg)
+                    send_email('[订单]', msg)
+                    account.place_order(new_order)
+                    if retry_count > 1:
+                        self.ensure_order_filled(account, data_portal, new_order, period, retry_count-1)
+                else:
+                    logging.info("没有还未成交的订单, 不需要ensure")
+            except:
+                import traceback
+                err_msg = "ensure失败:{}".format(traceback.format_exc())
+                logging.error(err_msg)
+                send_email("[订单]ensure失败", err_msg)
+
+        if retry_count <= 0:
+            raise RuntimeError('wrong retry count')
+        if not isinstance(order, LimitOrder):
+            raise RuntimeError("wrong order type")
+
+        threading.Thread(name='ensure_order_filled', target=ensure).start()
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
@@ -68,12 +118,13 @@ class TestStrategy2(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            # if current_price:
-            #     order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
-            # else:
-            #     logging.warning("没有获取到当前价格，将会以市价单下单")
-            order = MKTOrder(self.code, direction, abs(change), event.visible_time)
-            account.place_order(order)
+            if current_price:
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                account.place_order(order)
+                self.ensure_order_filled(account, data_portal, order, 60, 3)
+            else:
+                order = MKTOrder(self.code, direction, abs(change), event.visible_time)
+                account.place_order(order)
             msg = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, 订单:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
                         current_price, order.__dict__)
@@ -110,13 +161,13 @@ class TestStrategy2(AbstractStrategy):
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
 
-            # if current_price:
-            #     order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price=current_price,
-            #                        quantity_split=quantity_split)
-            # else:
-            #     logging.warning("没有获取到当前价格，将会以市价单下单")
-            order = MKTOrder(self.code, direction, abs(change), event.visible_time)
-            account.place_order(order)
+            if current_price:
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                account.place_order(order)
+                self.ensure_order_filled(account, data_portal, order, 50, 1)
+            else:
+                order = MKTOrder(self.code, direction, abs(change), event.visible_time)
+                account.place_order(order)
             msg = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, 订单:{}".format(event.visible_time,
                                                                                       current_position,
                                                                                       net_value, dest_position,
