@@ -2,6 +2,7 @@ import logging
 import threading
 import time
 
+from pandas._libs.tslibs.timedeltas import Timedelta
 from pandas._libs.tslibs.timestamps import Timestamp
 
 from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder, OrderStatus
@@ -9,7 +10,7 @@ from se.domain2.domain import send_email
 from se.domain2.engine.engine import AbstractStrategy, Engine, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
 import numpy as np
-from se.domain2.time_series.time_series import HistoryDataQueryCommand
+from se.domain2.time_series.time_series import HistoryDataQueryCommand, Price
 
 
 class TestStrategy2(AbstractStrategy):
@@ -26,8 +27,13 @@ class TestStrategy2(AbstractStrategy):
         else:
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen(second_offset=5))
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-60))
+            market_close_set_price = EventDefinition(ed_type=EventDefinitionType.TIME,
+                                                     time_rule=MarketClose(second_offset=-5))
+            engine.register_event(market_close_set_price, self.set_close_price)
+
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
+
         # 初始化昨日开盘价和收盘价
         self.last_open = None
         self.last_close = None
@@ -137,6 +143,15 @@ class TestStrategy2(AbstractStrategy):
             logging.info(msg)
 
         self.last_open = current_price
+
+    def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
+        cp: Price = data_portal.current_price([self.code], None)[self.code]
+        self.last_close = cp.price
+        if (event.visible_time - cp.time) > Timedelta(seconds=10):
+            msg = "获取到的最新价格有些延迟，当前时间:{}，最新价格的时间::{}, 最新价:{}".\
+                format(event.visible_time, cp.time, cp.price)
+            logging.warning(msg)
+            send_email("[系统]价格延迟", msg)
 
     def market_close(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
