@@ -70,6 +70,7 @@ class Order(metaclass=ABCMeta):
         self.fee = 0
         self.execution_map = {}
         self.quantity_split = quantity_split
+        self.ib_order_id = None
 
 
     @abstractmethod
@@ -338,7 +339,7 @@ class AbstractAccount(metaclass=ABCMeta):
     def get_open_orders(self):
         ods = []
         for order in self.orders:
-            if order.status == OrderStatus.CREATED:
+            if order.status == OrderStatus.CREATED or order.status == OrderStatus.PARTIAL_FILLED:
                 ods.append(order)
         return ods
 
@@ -447,6 +448,10 @@ class AbstractAccount(metaclass=ABCMeta):
             net_value += self.positions[code] * current_prices[code]
         return net_value
 
+    @abstractmethod
+    def cancel_open_order(self, open_order):
+        pass
+
 
 class AccountRepo(metaclass=ABCMeta):
     @abstractmethod
@@ -459,6 +464,10 @@ class AccountRepo(metaclass=ABCMeta):
 
 
 class BacktestAccount(AbstractAccount):
+
+    def cancel_open_order(self, open_order):
+        raise NotImplementedError
+
     def match(self, data):
         open_orders = self.get_open_orders()
         for o in open_orders:

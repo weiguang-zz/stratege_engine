@@ -336,6 +336,21 @@ class IBClient(EWrapper):
 
 class IBAccount(AbstractAccount, EWrapper):
 
+    def cancel_open_order(self, open_order: Order):
+        if not open_order.ib_order_id:
+            raise RuntimeError("ib_order_id is None")
+        retry_count = 3
+        for i in range(retry_count):
+            self.cli.cli.cancelOrder(orderId=open_order.ib_order_id)
+            time.sleep(3)
+            if open_order.status == OrderStatus.CANCELED:
+                logging.info("取消订单成功")
+                break
+            else:
+                logging.error("取消订单失败，将会重试")
+        if open_order.status != OrderStatus.CANCELED:
+            raise RuntimeError("取消订单失败")
+
     def execDetails(self, reqId: int, contract: Contract, execution: Execution):
         if execution.orderId not in self.ib_order_id_to_order:
             logging.info("该订单不是由该策略产生的订单，将会忽略, orderId:{}".format(execution.orderId))
@@ -379,8 +394,8 @@ class IBAccount(AbstractAccount, EWrapper):
             return
         order: Order = self.ib_order_id_to_order[orderId]
         # 下面只需要处理下单失败的情况，比如因为合约不可卖空导致的失败，这种情况需要将订单状态置为FAILED
-        if status == 'Inactive':
-            order.status = OrderStatus.FAILED
+        if status == 'Inactive' or status == 'Cancelled':
+            order.status = OrderStatus.FAILED if status == 'Inactive' else OrderStatus.CANCELED
             if self.order_callback:
                 self.order_callback.order_status_change(order, self)
 
