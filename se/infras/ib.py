@@ -27,6 +27,7 @@ from trading_calendars import TradingCalendar
 from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MKTOrder, OrderDirection, LimitOrder, \
     DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution, Operation, OrderStatus
 from se.domain2.domain import send_email
+from se.domain2.monitor import alarm, AlarmLevel, EscapeParam, do_log, retry
 from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Asset, HistoryDataQueryCommand, \
     TSData, Price
 
@@ -136,52 +137,72 @@ class IBClient(EWrapper):
         super().nextValidId(orderId)
         self._next_valid_id = orderId
 
+    @alarm(target="尝试连接", freq=Timedelta(minutes=10))
+    def try_connect(self):
+        # 先清理掉无效的连接
+        if self.cli.connState == EClient.CONNECTED:
+            self.cli.disconnect()
+        self.cli.connect(self.host, self.port, self.client_id)
+        if self.cli.connState == EClient.CONNECTED and self.cli.reader.is_alive():
+            threading.Thread(name="ib_msg_consumer", target=self.cli.run).start()
+            # 等待客户端初始化成功
+            time.sleep(3)
+            # 重新订阅
+            if self.tick_subscriber:
+                if isinstance(self.tick_subscriber, IBTick):
+                    self.tick_subscriber.re_connected()
+        else:
+            raise RuntimeError("重新连接失败")
+
     def __init__(self, host, port, client_id):
         super().__init__()
         cli = EClient(self)
         self.cli = cli
+        self.host = host
+        self.port = port
+        self.client_id = client_id
         self.account_subscriber = None
         self.tick_subscriber = None
         self._next_valid_id = None
         self.code_contract_map = {}
 
-        def try_connect():
-            # 先清理掉无效的连接
-            if cli.connState == EClient.CONNECTED:
-                cli.disconnect()
-            cli.connect(host, port, client_id)
-            if cli.connState == EClient.CONNECTED:
-                threading.Thread(name="ib_msg_consumer", target=cli.run).start()
-                # 等待客户端初始化成功
-                time.sleep(3)
+        # def try_connect():
+        #     # 先清理掉无效的连接
+        #     if cli.connState == EClient.CONNECTED:
+        #         cli.disconnect()
+        #     cli.connect(host, port, client_id)
+        #     if cli.connState == EClient.CONNECTED:
+        #         threading.Thread(name="ib_msg_consumer", target=cli.run).start()
+        #         # 等待客户端初始化成功
+        #         time.sleep(3)
 
-        try_connect()
+        self.try_connect()
 
         # 启动ping线程，如果与服务器的连接丢失，则会尝试重新连接
         def ping():
-            retry_count = 0
+            # retry_count = 0
             while True:
                 try:
                     if cli.connState != EClient.CONNECTED or not cli.reader.is_alive():
-                        retry_count += 1
-                        if retry_count % 60 == 1:
-                            # 每隔10分钟进行邮件提醒
-                            logging.info("发送邮件通知")
-                            send_email("【系统】连接断开，将会尝试重新连接",
-                                       "client 信息: host:{}, port:{}, client_id:{}".
-                                       format(self.cli.host, self.cli.port, self.cli.clientId))
+                        # retry_count += 1
+                        # if retry_count % 60 == 1:
+                        #     # 每隔10分钟进行邮件提醒
+                        #     logging.info("发送邮件通知")
+                        #     send_email("【系统】连接断开，将会尝试重新连接",
+                        #                "client 信息: host:{}, port:{}, client_id:{}".
+                        #                format(self.cli.host, self.cli.port, self.cli.clientId))
                         logging.info("尝试重新连接")
-                        try_connect()
-                        if cli.connState == EClient.CONNECTED and cli.reader.is_alive():
-                            retry_count = 0
-                            logging.info("重新连接成功，发送邮件通知")
-                            send_email("【系统】重新连接成功",
-                                       "client 信息: host:{}, port:{}, client_id:{}".
-                                       format(self.cli.host, self.cli.port, self.cli.clientId))
-                            # 重新订阅
-                            if self.tick_subscriber:
-                                if isinstance(self.tick_subscriber, IBTick):
-                                    self.tick_subscriber.re_connected()
+                        self.try_connect()
+                        # if cli.connState == EClient.CONNECTED and cli.reader.is_alive():
+                        #     retry_count = 0
+                        #     logging.info("重新连接成功，发送邮件通知")
+                        #     send_email("【系统】重新连接成功",
+                        #                "client 信息: host:{}, port:{}, client_id:{}".
+                        #                format(self.cli.host, self.cli.port, self.cli.clientId))
+                        #     # 重新订阅
+                        #     if self.tick_subscriber:
+                        #         if isinstance(self.tick_subscriber, IBTick):
+                        #             self.tick_subscriber.re_connected()
                 except:
                     import traceback
                     logging.error("{}".format(traceback.format_exc()))
@@ -306,7 +327,6 @@ class IBClient(EWrapper):
         return resp
 
     def placeOrder(self, ib_order_id, contract, order):
-        logging.info("下单, 合约:{}, 订单:{}".format(contract, order))
         self.cli.placeOrder(ib_order_id, contract, order)
 
     def next_valid_id(self):
@@ -336,18 +356,14 @@ class IBClient(EWrapper):
 
 class IBAccount(AbstractAccount, EWrapper):
 
+    @do_log(target_name='取消订单', escape_params=[EscapeParam(index=0, key='self')])
+    @alarm(target='取消订单', escape_params=[EscapeParam(index=0, key='self')])
+    @retry(limit=3)
     def cancel_open_order(self, open_order: Order):
         if not open_order.ib_order_id:
             raise RuntimeError("ib_order_id is None")
-        retry_count = 3
-        for i in range(retry_count):
-            self.cli.cli.cancelOrder(orderId=open_order.ib_order_id)
-            time.sleep(3)
-            if open_order.status == OrderStatus.CANCELED:
-                logging.info("取消订单成功")
-                break
-            else:
-                logging.error("取消订单失败，将会重试")
+        self.cli.cli.cancelOrder(orderId=open_order.ib_order_id)
+        time.sleep(2)
         if open_order.status != OrderStatus.CANCELED:
             raise RuntimeError("取消订单失败")
 
@@ -394,52 +410,23 @@ class IBAccount(AbstractAccount, EWrapper):
             return
         order: Order = self.ib_order_id_to_order[orderId]
         # 下面只需要处理下单失败的情况，比如因为合约不可卖空导致的失败，这种情况需要将订单状态置为FAILED
-        if status == 'Inactive' or status == 'Cancelled':
-            order.status = OrderStatus.FAILED if status == 'Inactive' else OrderStatus.CANCELED
+
+        if status == 'Submitted':
+            order.status = OrderStatus.SUBMITTED
+            if self.order_callback:
+                self.order_callback.order_status_change(order, self)
+        elif status == 'Inactive':
+            order.status = OrderStatus.FAILED
+            if self.order_callback:
+                self.order_callback.order_status_change(order, self)
+        elif status == 'Cancelled':
+            order.status = OrderStatus.CANCELED
             if self.order_callback:
                 self.order_callback.order_status_change(order, self)
 
-
-        # if orderId not in self.ib_order_id_to_order:
-        #     logging.warning("该订单不是由该策略产生的订单，将会忽略, orderId:{}".format(orderId))
-        #     return
-        #
-        # order: Order = self.ib_order_id_to_order[orderId]
-        # if order.remaining() < remaining:
-        #     raise RuntimeError("非法的成交")
-        # real_filled = 0
-        # if order.remaining() > remaining:
-        #     real_filled = order.remaining() - remaining
-        # if real_filled == 0:
-        #     logging.warning("没有真的成交，将会忽略")
-        #     return
-        #
-        # # 修改现金
-        # net_value_before = self.cash + order.net_value()
-        # order.order_filled_realtime(remaining, avgFillPrice)
-        # new_cash = net_value_before - order.net_value()
-        # self.cash = new_cash
-        #
-        # if order.direction == OrderDirection.SELL:
-        #     real_filled = -real_filled
-        #
-        # if order.code not in self.positions:
-        #     self.positions[order.code] = real_filled
-        # else:
-        #     self.positions[order.code] += real_filled
-        # if self.positions[order.code] <= 0:
-        #     self.positions.pop(order.code)
-        #
-        # if len(self.positions) <= 0:
-        #     next_operation = self.current_operation.end(self.cash)
-        #     self.history_operations.append(self.current_operation)
-        #     self.current_operation = next_operation
-        #
-        # self.order_callback.order_status_change(order, self)
-        # # 订单成交之后，保存当前账户状态
-        # if remaining <= 0:
-        #     self.save()
-
+    @do_log(target_name='下单', escape_params=[EscapeParam(index=0, key='self')])
+    @alarm(target='下单', escape_params=[EscapeParam(index=0, key='self')])
+    @retry(limit=3)
     def place_order(self, order: Order):
         self.orders.append(order)
         ib_order_id = self.cli.next_valid_id()
@@ -447,6 +434,10 @@ class IBAccount(AbstractAccount, EWrapper):
         self.ib_order_id_to_order[ib_order_id] = order
         ib_order = self.change_to_ib_order(order)
         self.cli.placeOrder(ib_order_id, self.cli.code_to_contract(order.code), ib_order)
+        time.sleep(2)
+        if order.status == OrderStatus.FAILED or order.status == OrderStatus.CREATED \
+                or order.status == OrderStatus.CANCELED:
+            raise RuntimeError("place order error")
 
     def match(self, data):
         raise NotImplementedError
@@ -469,7 +460,6 @@ class IBAccount(AbstractAccount, EWrapper):
                     import traceback
                     err_msg = "保存账户失败:{}".format(traceback.format_exc())
                     logging.error(err_msg)
-                    send_email("【系统】保存账户失败", err_msg)
                 time.sleep(30 * 60)
 
         threading.Thread(name="account_save", target=save).start()
@@ -477,19 +467,21 @@ class IBAccount(AbstractAccount, EWrapper):
     def start_sync_order_executions_thread(self):
         # 启动订单同步线程，避免因为没有收到消息导致账户状态不一致
         def sync_order_executions():
+            @alarm(level=AlarmLevel.ERROR, target="同步订单详情")
+            def do_sync():
+                if len(self.get_open_orders()) > 0:
+                    logging.info("开始同步订单的执行详情")
+                    req = Request.new_request()
+                    exec_filter = ExecutionFilter()
+                    exec_filter.clientId = self.cli.cli.clientId
+                    self.cli.cli.reqExecutions(req.req_id, exec_filter)
             while True:
                 try:
-                    if len(self.get_open_orders()) > 0:
-                        logging.info("开始同步订单的执行详情")
-                        req = Request.new_request()
-                        exec_filter = ExecutionFilter()
-                        exec_filter.clientId = self.cli.cli.clientId
-                        self.cli.cli.reqExecutions(req.req_id, exec_filter)
+                    do_sync()
                 except:
                     import traceback
                     err_msg = "同步订单详情失败:{}".format(traceback.format_exc())
                     logging.error(err_msg)
-                    send_email("【系统】同步订单详情失败", err_msg)
                 time.sleep(30)
 
         threading.Thread(name="sync_order_executions", target=sync_order_executions).start()
@@ -679,39 +671,36 @@ class IBTick(TimeSeriesFunction, EWrapper):
         us_calendar: TradingCalendar = trading_calendars.get_calendar("NYSE")
         pre_open_last = Timedelta(minutes=30, hours=5)
 
+        @alarm(level=AlarmLevel.ERROR, target='检查最新价格')
+        def do_check():
+            if self.has_sub_us_asset():
+                now = Timestamp.now(tz='Asia/Shanghai')
+                next_open = us_calendar.next_open(now)
+                pre_open_start = next_open - pre_open_last
+                if (pre_open_start + time_threshold) < now < next_open:
+                    for code in self.sub_codes:
+                        if code not in self.lastest_tick:
+                            err_msg = "实时数据获取异常,没有{}的最新价格数据，当前时间:{}".format(code, now)
+                            raise RuntimeError(err_msg)
+                        else:
+                            tick: Tick = self.lastest_tick[code]
+                            if (now - tick.visible_time) > time_threshold:
+                                err_msg = "实时数据获取异常,{}的最新价格数据为：{}，当前时间:{}". \
+                                    format(code, tick.__dict__, now)
+                                raise RuntimeError(err_msg)
+                            else:
+                                logging.info("实时数据正常，{}的最新价格数据为：{}，当前时间:{}".
+                                             format(code, tick.__dict__, now))
+
         def check_realtime_data():
             while True:
                 try:
-                    # 如果没有订阅美股资产实时数据的话，则忽略
-                    if self.has_sub_us_asset():
-                        now = Timestamp.now(tz='Asia/Shanghai')
-                        next_open = us_calendar.next_open(now)
-                        pre_open_start = next_open - pre_open_last
-                        if (pre_open_start + time_threshold) < now < next_open:
-                            for code in self.sub_codes:
-                                if code not in self.lastest_tick:
-                                    err_msg = "实时数据获取异常,没有{}的最新价格数据，当前时间:{}".format(code, now)
-                                    logging.error(err_msg)
-                                    send_email("【系统】实时数据获取异常", err_msg)
-                                else:
-                                    tick: Tick = self.lastest_tick[code]
-                                    if (now - tick.visible_time) > time_threshold:
-                                        err_msg = "实时数据获取异常,{}的最新价格数据为：{}，当前时间:{}". \
-                                            format(code, tick.__dict__, now)
-                                        logging.error(err_msg)
-                                        send_email("【系统】实时数据获取异常", err_msg)
-                                    else:
-                                        logging.info("实时数据正常，{}的最新价格数据为：{}，当前时间:{}".
-                                                     format(code, tick.__dict__, now))
-                        else:
-                            logging.info("当前时间不是盘前交易时间段，不进行校验")
-                    else:
-                        logging.info("没有订阅美股数据，不需要监控实时数据")
+                    logging.info("开始检查实时数据")
+                    do_check()
                 except:
                     import traceback
-                    err_msg = "监控实时数据失败:{}".format(traceback.format_exc())
+                    err_msg = "检查实时数据异常:{}".format(traceback.format_exc())
                     logging.error(err_msg)
-                    send_email("【系统】监控实时数据失败", err_msg)
                 time.sleep(10 * 60)
 
         threading.Thread(name="check_realtime_data", target=check_realtime_data).start()

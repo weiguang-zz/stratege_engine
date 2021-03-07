@@ -8,6 +8,7 @@ from typing import *
 from pandas import Timedelta, Timestamp
 
 from se.domain2.domain import BeanContainer
+from se.domain2.monitor import alarm, AlarmLevel
 from se.domain2.time_series.time_series import Bar, Tick
 
 
@@ -23,12 +24,11 @@ class CrossDirection(Enum):
 
 class OrderStatus(Enum):
     CREATED = "CREATED"
+    SUBMITTED = "SUBMITTED"
     CANCELED = "CANCELED"
     FILLED = "FILLED"
     FAILED = "FAILED"
     PARTIAL_FILLED = "PARTIAL_FILLED"
-
-
 
 
 class OrderExecution(object):
@@ -71,7 +71,11 @@ class Order(metaclass=ABCMeta):
         self.execution_map = {}
         self.quantity_split = quantity_split
         self.ib_order_id = None
+        self.reason = None
 
+    def with_reason(self, reason: str):
+        self.reason = reason
+        return self
 
     @abstractmethod
     def bar_match(self, bar: Bar) -> OrderExecution:

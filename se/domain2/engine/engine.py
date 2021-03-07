@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import threading
 import time
 from abc import ABCMeta, abstractmethod
 from enum import Enum
@@ -11,8 +12,10 @@ from pandas._libs.tslibs.timedeltas import Timedelta
 from pandas._libs.tslibs.timestamps import Timestamp
 from trading_calendars import TradingCalendar
 
-from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Tick, OrderCallback, AccountRepo
+from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Tick, OrderCallback, AccountRepo, \
+    LimitOrder, OrderStatus, MKTOrder
 from se.domain2.domain import BeanContainer
+from se.domain2.monitor import alarm, AlarmLevel, EscapeParam, do_alarm, retry
 from se.domain2.time_series.time_series import TimeSeriesRepo, HistoryDataQueryCommand, TimeSeriesSubscriber, TSData, \
     Price, TimeSeries
 import numpy as np
@@ -329,16 +332,27 @@ class DataPortal(TimeSeriesSubscriber):
         self._current_price_map: Mapping[str, Price] = {}
         self.mocked_current_price = mocked_current_prices
 
-    def current_price(self, codes: List[str], current_time: Timestamp) -> Mapping[str, Price]:
-
+    @alarm(level=AlarmLevel.ERROR, target="获取最新价格")
+    @retry(limit=10, interval=1)
+    def current_price(self, codes: List[str], current_time: Timestamp,
+                      delay_allowed: Timedelta = Timedelta(seconds=10)) -> Mapping[str, Price]:
         if self.mocked_current_price:
             cp = self.mocked_current_price[current_time]
             return {code: cp[code] for code in codes}
         else:
+            # 获取线上数据的逻辑
             res = {}
             for code in codes:
                 if code in self._current_price_map:
-                    res[code] = self._current_price_map[code]
+                    price = self._current_price_map[code]
+                    # 检查价格的延迟
+                    if delay_allowed:
+                        if current_time - price.time > delay_allowed:
+                            raise RuntimeError("没有获取到{}的最新价格，当前时间:{}, 最新价格:{}, 允许的延迟:{}".
+                                               format(code, current_time, price.__dict__, delay_allowed))
+                    res[code] = price
+                else:
+                    raise RuntimeError("没有获取到{}的最新价格，当前时间:{}".format(code, current_time))
 
             return res
 
@@ -354,6 +368,60 @@ class DataPortal(TimeSeriesSubscriber):
 
 class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
 
+    @alarm(target="订单状态变更", escape_params=[EscapeParam(index=0, key='self'), EscapeParam(index=2, key='account')])
+    def order_status_change(self, order, account):
+        self.do_order_status_change(order, account)
+
+    def ensure_order_filled(self, account: AbstractAccount, data_portal: DataPortal, order: LimitOrder, period: int,
+                            retry_count: int):
+        """
+        将通过如下算法来保证订单一定成交：
+        每隔一定时间检查订单是否还未成交，如果是的话，则取消原来的订单，并且按照最新的价格下一个新的订单，同时监听新的订单
+        :param account:
+        :param order:
+        :param period:
+        :param retry_count:
+        :return:
+        """
+        def ensure():
+            try:
+                time.sleep(period)
+                logging.info("ensure order filled thread start")
+                if order.status == OrderStatus.CREATED or order.status == OrderStatus.PARTIAL_FILLED:
+                    account.cancel_open_order(order)
+                    # 保证下单的总价值是相同的
+                    remain_quantity = order.quantity - order.filled_quantity
+                    cp = data_portal.current_price([order.code], Timestamp.now(tz='Asia/Shanghai'))[order.code]
+                    new_quantity = int(remain_quantity * order.limit_price / cp.price)
+                    now = Timestamp.now(tz='Asia/Shanghai')
+                    if retry_count > 1:
+                        new_order = LimitOrder(order.code, order.direction, new_quantity,
+                                               now, cp.price)
+                    else:
+                        new_order = MKTOrder(order.code, order.direction, new_quantity, now)
+                    account.place_order(new_order)
+                    if retry_count > 1:
+                        self.ensure_order_filled(account, data_portal, new_order, period, retry_count - 1)
+                else:
+                    logging.info("没有还未成交的订单, 不需要ensure")
+            except:
+                import traceback
+                err_msg = "ensure order filled失败:{}".format(traceback.format_exc())
+                logging.error(err_msg)
+                # 显示告警，因为在线程的Runable方法中，不能再抛出异常。
+                do_alarm('ensure order filled', AlarmLevel.ERROR, None, None, '{}'.format(traceback.format_exc()))
+
+        if retry_count <= 0:
+            raise RuntimeError('wrong retry count')
+        if not isinstance(order, LimitOrder):
+            raise RuntimeError("wrong order type")
+
+        threading.Thread(name='ensure_order_filled', target=ensure).start()
+
+    @abstractmethod
+    def do_order_status_change(self, order, account):
+        pass
+
     @abstractmethod
     def do_initialize(self, engine: Engine, data_portal: DataPortal):
         pass
@@ -364,35 +432,6 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
 
     def __init__(self, scope: Scope):
         self.scope = scope
-
-    def get_recent_price_after(self, codes: List[str], visible_time: Timestamp, data_portal: DataPortal):
-        """
-        该方法用在实盘中，会一直等待直到获取到visible_time之后的价格数据，通常用于在开盘的时候调用
-        :param codes:
-        :param visible_time:
-        :param data_portal:
-        :return:
-        """
-        retry_limit = 20
-        if self.is_backtest:
-            retry_limit = 1
-        count = 0
-        while count < retry_limit:
-            res = {}
-            cp = data_portal.current_price(codes, visible_time)
-            if len(cp) == len(codes):
-                if np.array([cp[code].time >= visible_time for code in codes]).all():
-                    for code in codes:
-                        res[code] = cp[code].price
-                    if len(codes) == 1:
-                        return res[codes[0]]
-                    else:
-                        return res
-
-            logging.warning("没有获取到最新的价格数据，将会重试:{}".format(count))
-            count += 1
-            time.sleep(1)
-
 
 class EventLine(object):
 

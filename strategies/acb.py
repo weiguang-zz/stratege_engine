@@ -14,6 +14,9 @@ class ACBStrategy(AbstractStrategy):
     交易标的： ACB
     """
 
+    def do_order_status_change(self, order, account):
+        pass
+
     def do_initialize(self, engine: Engine, data_portal: DataPortal):
         if engine.is_backtest:
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
@@ -27,18 +30,18 @@ class ACBStrategy(AbstractStrategy):
         self.last_open = None
         self.last_close = None
         if not engine.is_backtest:
-            # command = HistoryDataQueryCommand(None, None, self.scope.codes, window=1)
-            # command.with_calendar(trading_calendar=self.scope.trading_calendar)
-            # df = data_portal.history_data("ibAdjustedDailyBar", command)
-            # if len(df) >= 1:
-            #     self.last_open = df.iloc[-1]['open']
-            #     self.last_close = df.iloc[-1]['close']
-            #     logging.info("初始化数据成功，昨日开盘价:{}, 昨日收盘价:{}, bar的开始时间:{}"
-            #                  .format(self.last_open, self.last_close, df.iloc[-1]['start_time']))
-            # else:
-            #     raise RuntimeError("没有获取到昨日开盘价和收盘价")
-            self.last_open = 11.19
-            self.last_close = 11.03
+            command = HistoryDataQueryCommand(None, None, self.scope.codes, window=1)
+            command.with_calendar(trading_calendar=self.scope.trading_calendar)
+            df = data_portal.history_data("ibAdjustedDailyBar", command)
+            if len(df) >= 1:
+                self.last_open = df.iloc[-1]['open']
+                self.last_close = df.iloc[-1]['close']
+                logging.info("初始化数据成功，昨日开盘价:{}, 昨日收盘价:{}, bar的开始时间:{}"
+                             .format(self.last_open, self.last_close, df.iloc[-1]['start_time']))
+            else:
+                raise RuntimeError("没有获取到昨日开盘价和收盘价")
+            # self.last_open = 11.19
+            # self.last_close = 11.03
 
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
@@ -50,12 +53,13 @@ class ACBStrategy(AbstractStrategy):
         net_value = None
 
         # 等待直到获取到最新的股票价格
-        current_price = self.get_recent_price_after([self.code], event.visible_time, data_portal)
-        if not current_price:
-            msg = "没有获取到当天的开盘价,code:{}".format(self.code)
-            logging.error(msg)
-            send_email("【系统】没有获取到最新价格", msg)
-        else:
+        current_price = None
+        try:
+            current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
+        except:
+            logging.error("没有获取到当天的开盘价,code:{}".format(self.code))
+
+        if current_price:
             net_value = account.net_value({self.code: current_price})
 
         if len(account.positions) > 0:
@@ -67,17 +71,19 @@ class ACBStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            # if current_price:
-            #     order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
-            # else:
-            #     logging.warning("没有获取到当前价格，将会以市价单下单")
-            order = MKTOrder(self.code, direction, abs(change), event.visible_time)
-            account.place_order(order)
-            msg = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, 订单:{}" \
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
-                        current_price, order.__dict__)
-            logging.info("开盘下单:{}".format(msg))
-            send_email('【订单】下单', msg)
+                        current_price)
+            if current_price:
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                order.with_reason(reason)
+                account.place_order(order)
+                self.ensure_order_filled(account, data_portal, order, period=60, retry_count=1)
+            else:
+                logging.warning("没有获取到当前价格，将会以市价单下单")
+                order = MKTOrder(self.code, direction, abs(change), event.visible_time)
+                order.with_reason(reason)
+                account.place_order(order)
         else:
             msg = "不需要下单, 时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}". \
                 format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
@@ -91,12 +97,13 @@ class ACBStrategy(AbstractStrategy):
         current_position = 0
         net_value = None
 
-        current_price = self.get_recent_price_after([self.code], event.visible_time, data_portal)
-        if not current_price:
-            msg = "没有获取到当前价格, code:{}".format(self.code)
-            logging.error(msg)
-            send_email("【系统】没有获取到最新价格", msg)
-        else:
+        # 等待直到获取到最新的股票价格
+        current_price = None
+        try:
+            current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
+        except:
+            logging.error("没有获取到当天的开盘价,code:{}".format(self.code))
+        if current_price:
             net_value = account.net_value({self.code: current_price})
 
         if current_price and self.last_open and current_price > self.last_open:
@@ -108,23 +115,21 @@ class ACBStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            # quantity_split = None
-            # if current_position != 0:
-            #     quantity_split = [-current_position, change + current_position]
-            # if current_price:
-            #     order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price=current_price,
-            #                        quantity_split=quantity_split)
-            # else:
-            #     logging.warning("没有获取到当前价格，将会以市价单下单")
-            order = MKTOrder(self.code, direction, abs(change), event.visible_time)
-            account.place_order(order)
-            msg = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, 订单:{}".format(event.visible_time,
+
+            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}".format(event.visible_time,
                                                                                       current_position,
                                                                                       net_value, dest_position,
                                                                                       self.last_close,
-                                                                                      current_price, order.__dict__)
-            logging.info("收盘下单:{}".format(msg))
-            send_email("【订单】下单", msg)
+                                                                                      current_price)
+            if current_price:
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_position)
+                order.with_reason(reason)
+                account.place_order(order)
+                self.ensure_order_filled(account, data_portal, order, period=20, retry_count=1)
+            else:
+                order = MKTOrder(self.code, direction, abs(change), event.visible_time)
+                order.with_reason(reason)
+                account.place_order(order)
         else:
             logging.info("不需要下单, 时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 今日开盘价:{}, 今日收盘价:{}".
                          format(event.visible_time,
@@ -134,10 +139,3 @@ class ACBStrategy(AbstractStrategy):
                                 current_price))
 
         self.last_close = current_price
-
-    def order_status_change(self, order: Order, account):
-        logging.info("订单状态变更, 订单状态:{}，账户持仓:{}, 账户现金:{}".
-                     format(order.__dict__, account.positions, account.cash))
-        msg = {"positions": account.positions, "cash": account.cash, "order": order.__dict__}
-        title = "【订单】状态变更({})".format(order.status.value)
-        send_email(title, str(msg))
