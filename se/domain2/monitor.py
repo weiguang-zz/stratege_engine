@@ -13,7 +13,7 @@ class AlarmLevel(Enum):
 
 class EscapeParam(object):
     def __init__(self, index: int, key: str, property_name: str = None):
-        if not (index > 0 and key):
+        if not (index >= 0 and key):
             raise RuntimeError("wrong escape param")
         self.index = index
         self.key = key

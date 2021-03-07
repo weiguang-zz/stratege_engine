@@ -7,8 +7,7 @@ from strategies.acb import ACBStrategy
 from strategies.test import TestStrategy
 
 engine = Engine()
-get_calendar("")
-scope = Scope(["000700_STK_HKD_SMART"], trading_calendar=get_calendar("HKEX"))
+scope = Scope(["700_STK_HKD_SEHK"], trading_calendar=get_calendar("HKEX"))
 strategy = TestStrategy(scope)
 
 account_name = "ib_sim_test"
