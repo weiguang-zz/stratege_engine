@@ -343,7 +343,8 @@ class AbstractAccount(metaclass=ABCMeta):
     def get_open_orders(self):
         ods = []
         for order in self.orders:
-            if order.status == OrderStatus.CREATED or order.status == OrderStatus.PARTIAL_FILLED:
+            if order.status == OrderStatus.CREATED or order.status == OrderStatus.PARTIAL_FILLED or \
+                    order.status == OrderStatus.SUBMITTED:
                 ods.append(order)
         return ods
 

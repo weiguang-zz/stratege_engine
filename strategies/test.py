@@ -45,29 +45,30 @@ class TestStrategy(AbstractStrategy):
         start = now - self.time_span
         check_df = self.daily_ticks[start: now]
         this_price = event.data.price
-        if len(account.positions) > 0:
-            max_price = check_df['price'].max()
-            change = abs((this_price - max_price) / max_price)
-            if change > self.threshold:
-                reason = '当前价格:{}, 时间范围：{}的最高价为：{}, 当前持仓:{}'.\
-                    format(this_price, self.time_span, max_price, account.positions)
-                order = LimitOrder(self.code, OrderDirection.SELL, quantity=abs(account.positions[self.code]),
-                                   place_time=event.visible_time, limit_price=this_price)
-                order.with_reason(reason)
-                account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=10, retry_count=2)
-        else:
-            lowest_price = check_df['price'].min()
-            change = abs((this_price - lowest_price) / lowest_price)
-            if change > self.threshold:
-                reason = '当前价格:{}, 时间范围：{}的最低价为：{}, 当前持仓:{}'.\
-                    format(this_price, self.time_span, lowest_price, account.positions)
-                quantity = int(account.cash / this_price)
-                order = LimitOrder(self.code, OrderDirection.BUY, quantity=quantity,
-                                   place_time=event.visible_time, limit_price=this_price)
-                order.with_reason(reason)
-                account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=10, retry_count=2)
+        if len(account.get_open_orders()) <= 0:
+            if len(account.positions) > 0:
+                max_price = check_df['price'].max()
+                change = abs((this_price - max_price) / max_price)
+                if change > self.threshold:
+                    reason = '当前价格:{}, 时间范围：{}的最高价为：{}, 当前持仓:{}'.\
+                        format(this_price, self.time_span, max_price, account.positions)
+                    order = LimitOrder(self.code, OrderDirection.SELL, quantity=abs(account.positions[self.code]),
+                                       place_time=event.visible_time, limit_price=this_price)
+                    order.with_reason(reason)
+                    account.place_order(order)
+                    self.ensure_order_filled(account, data_portal, order, period=10, retry_count=2)
+            else:
+                lowest_price = check_df['price'].min()
+                change = abs((this_price - lowest_price) / lowest_price)
+                if change > self.threshold:
+                    reason = '当前价格:{}, 时间范围：{}的最低价为：{}, 当前持仓:{}'.\
+                        format(this_price, self.time_span, lowest_price, account.positions)
+                    quantity = int(account.cash / this_price)
+                    order = LimitOrder(self.code, OrderDirection.BUY, quantity=quantity,
+                                       place_time=event.visible_time, limit_price=this_price)
+                    order.with_reason(reason)
+                    account.place_order(order)
+                    self.ensure_order_filled(account, data_portal, order, period=10, retry_count=2)
 
     def market_open(self):
         self.daily_ticks = DataFrame()
