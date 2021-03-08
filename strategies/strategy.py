@@ -1,16 +1,11 @@
 import logging
-import threading
-import time
 
-from pandas._libs.tslibs.timedeltas import Timedelta
-from pandas._libs.tslibs.timestamps import Timestamp
+import numpy as np
 
-from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder, OrderStatus
-from se.domain2.domain import send_email
+from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder
 from se.domain2.engine.engine import AbstractStrategy, Engine, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
-import numpy as np
-from se.domain2.time_series.time_series import HistoryDataQueryCommand, Price
+from se.domain2.time_series.time_series import HistoryDataQueryCommand
 
 
 class TestStrategy2(AbstractStrategy):
@@ -28,7 +23,7 @@ class TestStrategy2(AbstractStrategy):
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen(second_offset=5))
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-60))
             market_close_set_price = EventDefinition(ed_type=EventDefinitionType.TIME,
-                                                     time_rule=MarketClose(second_offset=-5))
+                                                     time_rule=MarketClose())
             engine.register_event(market_close_set_price, self.set_close_price)
 
         engine.register_event(market_open, self.market_open)
@@ -79,18 +74,18 @@ class TestStrategy2(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, strategy:{}" \
+                .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
+                        current_price, TestStrategy2.__doc__)
             if current_price:
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, 60, 3)
+                self.ensure_order_filled(account, data_portal, order, 30, 3)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
+                order.with_reason(reason)
                 account.place_order(order)
-            msg = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, 订单:{}" \
-                .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
-                        current_price, order.__dict__)
-            logging.info("开盘下单:{}".format(msg))
-            send_email('【订单】下单', msg)
         else:
             msg = "不需要下单, 时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}". \
                 format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
@@ -102,7 +97,7 @@ class TestStrategy2(AbstractStrategy):
     def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
         self.last_close = current_price
-
+        logging.info("设置收盘价为:{}".format(current_price))
 
     def market_close(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
@@ -127,21 +122,20 @@ class TestStrategy2(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(event.visible_time,
+                                                                                  current_position,
+                                                                                  net_value, dest_position,
+                                                                                  self.last_close,
+                                                                                  current_price, TestStrategy2.__doc__)
             if current_price:
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                order.with_reason(reason)
                 account.place_order(order)
                 self.ensure_order_filled(account, data_portal, order, 50, 1)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
+                order.with_reason(reason)
                 account.place_order(order)
-            msg = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, 订单:{}".format(event.visible_time,
-                                                                                      current_position,
-                                                                                      net_value, dest_position,
-                                                                                      self.last_close,
-                                                                                      current_price, order.__dict__)
-            logging.info("收盘下单:{}".format(msg))
-            send_email("【订单】下单", msg)
         else:
             logging.info("不需要下单, 时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 今日开盘价:{}, 今日收盘价:{}".
                          format(event.visible_time,
@@ -171,6 +165,8 @@ class TestStrategy3(AbstractStrategy):
             # 实盘的时候，在收盘前5s的时候提交订单
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen(second_offset=5))
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-60))
+            market_close_set_price = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
+            engine.register_event(market_close_set_price, self.set_close_price)
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
         self.is_backtest = engine.is_backtest
@@ -188,6 +184,11 @@ class TestStrategy3(AbstractStrategy):
             else:
                 raise RuntimeError("没有获取到昨日开盘价和收盘价")
             # self.last_close_price = 102.85
+
+    def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
+        cp = data_portal.current_price([self.code], event.visible_time)[self.code].price
+        self.last_close_price = cp
+        logging.info("设置收盘价为:{}".format(cp))
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
@@ -214,14 +215,14 @@ class TestStrategy3(AbstractStrategy):
 
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日开盘价：{}" \
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日开盘价：{}, strategy:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_close_price,
-                        current_price)
+                        current_price, TestStrategy3.__doc__)
             if current_price:
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=60, retry_count=1)
+                self.ensure_order_filled(account, data_portal, order, period=30, retry_count=3)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)
@@ -253,9 +254,9 @@ class TestStrategy3(AbstractStrategy):
 
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 当前价格" \
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 当前价格:{}, strategy:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position,
-                        current_price)
+                        current_price, TestStrategy3.__doc__)
             if current_price:
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
                 order.with_reason(reason)
@@ -270,7 +271,6 @@ class TestStrategy3(AbstractStrategy):
                 format(event.visible_time, current_position, net_value, dest_position,
                        current_price)
             logging.info(msg)
-        self.last_close_price = current_price
 
     def do_order_status_change(self, order, account):
         pass

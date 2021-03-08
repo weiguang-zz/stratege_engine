@@ -23,7 +23,10 @@ class ACBStrategy(AbstractStrategy):
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen())
         else:
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen(second_offset=5))
-            market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-30))
+            market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-60))
+            market_close_set_price = EventDefinition(ed_type=EventDefinitionType.TIME,
+                                                     time_rule=MarketClose())
+            engine.register_event(market_close_set_price, self.set_close_price)
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
         # 初始化昨日开盘价和收盘价
@@ -46,6 +49,11 @@ class ACBStrategy(AbstractStrategy):
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
+
+    def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
+        current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
+        self.last_close = current_price
+        logging.info("设置收盘价为:{}".format(current_price))
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
@@ -71,9 +79,9 @@ class ACBStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}" \
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, strategy:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
-                        current_price)
+                        current_price, ACBStrategy.__doc__)
             if current_price:
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
                 order.with_reason(reason)
@@ -116,11 +124,12 @@ class ACBStrategy(AbstractStrategy):
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
 
-            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}".format(event.visible_time,
-                                                                                      current_position,
-                                                                                      net_value, dest_position,
-                                                                                      self.last_close,
-                                                                                      current_price)
+            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(event.visible_time,
+                                                                                        current_position,
+                                                                                        net_value, dest_position,
+                                                                                        self.last_close,
+                                                                                        current_price,
+                                                                                        ACBStrategy.__doc__)
             if current_price:
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_position)
                 order.with_reason(reason)
