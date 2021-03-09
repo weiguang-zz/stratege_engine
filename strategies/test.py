@@ -6,6 +6,7 @@ from se.domain2.account.account import AbstractAccount, LimitOrder, OrderDirecti
 from se.domain2.engine.engine import AbstractStrategy, Engine, DataPortal, EventDefinition, EventDataType, \
     EventDefinitionType, Event, MarketOpen
 from se.domain2.time_series.time_series import Tick
+import logging
 
 
 class TestStrategy(AbstractStrategy):
@@ -57,6 +58,9 @@ class TestStrategy(AbstractStrategy):
                     order.with_reason(reason)
                     account.place_order(order)
                     self.ensure_order_filled(account, data_portal, order, period=10, retry_count=2)
+                else:
+                    logging.info("当前价格:{}, 时间范围：{}的最高价为：{}, 变动为:{}".
+                                 format(this_price, self.time_span, max_price, change))
             else:
                 lowest_price = check_df['price'].min()
                 change = abs((this_price - lowest_price) / lowest_price)
@@ -69,11 +73,16 @@ class TestStrategy(AbstractStrategy):
                     order.with_reason(reason)
                     account.place_order(order)
                     self.ensure_order_filled(account, data_portal, order, period=10, retry_count=2)
+                else:
+                    logging.info("当前价格:{}, 时间范围：{}的最低价为：{}, 变动为:{}".
+                                 format(this_price, self.time_span, lowest_price, change))
 
     def market_open(self):
+        logging.info("market is open")
         self.daily_ticks = DataFrame()
         self.market_is_open = True
 
     def market_close(self):
+        logging.info('market close')
         self.daily_ticks = DataFrame()
         self.market_is_open = False
