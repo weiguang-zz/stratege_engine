@@ -6,17 +6,20 @@ import threading
 import time
 from threading import Condition
 from typing import *
+from typing import Mapping
 
 import trading_calendars
 from ibapi import order_condition
 from ibapi.client import EClient
 from ibapi.commission_report import CommissionReport
-from ibapi.common import BarData, HistoricalTickLast, ListOfHistoricalTickLast, OrderId, TickAttribLast, TickerId
+from ibapi.common import BarData, HistoricalTickLast, ListOfHistoricalTickLast, OrderId, TickAttribLast, TickerId, \
+    TickAttrib
 from ibapi.contract import Contract, ContractDetails
 from ibapi.execution import Execution, ExecutionFilter
 from ibapi.order import Order as IBOrder
 from ibapi.order_condition import OrderCondition, PriceCondition
 from ibapi.tag_value import TagValue
+from ibapi.ticktype import TickType, TickTypeEnum
 from ibapi.wrapper import EWrapper
 from pandas import Timedelta
 from pandas import Timestamp
@@ -29,7 +32,7 @@ from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MK
 from se.domain2.domain import send_email
 from se.domain2.monitor import alarm, AlarmLevel, EscapeParam, do_log, retry
 from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Asset, HistoryDataQueryCommand, \
-    TSData, Price
+    TSData, Price, Tick
 
 
 class Request(object):
@@ -62,6 +65,21 @@ class Request(object):
 
 class IBClient(EWrapper):
     clients_map: Mapping[str, IBClient] = {}
+
+    def tickPrice(self, reqId: TickerId, tickType: TickType, price: float, attrib: TickAttrib):
+        super().tickPrice(reqId, tickType, price, attrib)
+        if self.market_data_subscriber:
+            self.market_data_subscriber.tickPrice(reqId, tickType, price, attrib)
+
+    def tickSize(self, reqId: TickerId, tickType: TickType, size: int):
+        super().tickSize(reqId, tickType, size)
+        if self.market_data_subscriber:
+            self.market_data_subscriber.tickSize(reqId, tickType, size)
+
+    def tickString(self, reqId: TickerId, tickType: TickType, value: str):
+        super().tickString(reqId, tickType, value)
+        if self.market_data_subscriber:
+            self.market_data_subscriber.tickString(reqId, tickType, value)
 
     def error(self, reqId: TickerId, errorCode: int, errorString: str):
         super().error(reqId, errorCode, errorString)
@@ -151,6 +169,9 @@ class IBClient(EWrapper):
             if self.tick_subscriber:
                 if isinstance(self.tick_subscriber, IBTick):
                     self.tick_subscriber.re_connected()
+            if self.market_data_subscriber:
+                if isinstance(self.market_data_subscriber, IBMarketData):
+                    self.market_data_subscriber.re_connected()
         else:
             raise RuntimeError("重新连接失败")
 
@@ -163,19 +184,9 @@ class IBClient(EWrapper):
         self.client_id = client_id
         self.account_subscriber = None
         self.tick_subscriber = None
+        self.market_data_subscriber: EWrapper = None
         self._next_valid_id = None
         self.code_contract_map = {}
-
-        # def try_connect():
-        #     # 先清理掉无效的连接
-        #     if cli.connState == EClient.CONNECTED:
-        #         cli.disconnect()
-        #     cli.connect(host, port, client_id)
-        #     if cli.connState == EClient.CONNECTED:
-        #         threading.Thread(name="ib_msg_consumer", target=cli.run).start()
-        #         # 等待客户端初始化成功
-        #         time.sleep(3)
-
         self.try_connect()
 
         # 启动ping线程，如果与服务器的连接丢失，则会尝试重新连接
@@ -184,25 +195,8 @@ class IBClient(EWrapper):
             while True:
                 try:
                     if cli.connState != EClient.CONNECTED or not cli.reader.is_alive():
-                        # retry_count += 1
-                        # if retry_count % 60 == 1:
-                        #     # 每隔10分钟进行邮件提醒
-                        #     logging.info("发送邮件通知")
-                        #     send_email("【系统】连接断开，将会尝试重新连接",
-                        #                "client 信息: host:{}, port:{}, client_id:{}".
-                        #                format(self.cli.host, self.cli.port, self.cli.clientId))
                         logging.info("尝试重新连接")
                         self.try_connect()
-                        # if cli.connState == EClient.CONNECTED and cli.reader.is_alive():
-                        #     retry_count = 0
-                        #     logging.info("重新连接成功，发送邮件通知")
-                        #     send_email("【系统】重新连接成功",
-                        #                "client 信息: host:{}, port:{}, client_id:{}".
-                        #                format(self.cli.host, self.cli.port, self.cli.clientId))
-                        #     # 重新订阅
-                        #     if self.tick_subscriber:
-                        #         if isinstance(self.tick_subscriber, IBTick):
-                        #             self.tick_subscriber.re_connected()
                 except:
                     import traceback
                     logging.error("{}".format(traceback.format_exc()))
@@ -304,6 +298,8 @@ class IBClient(EWrapper):
         contract.secType = ss[1]
         contract.currency = ss[2]
         contract.exchange = ss[3]
+        if len(ss) > 4:
+            contract.lastTradeDateOrContractMonth = ss[4]
         contracts: List[Contract] = self.query_contract(contract)
         if len(contracts) != 1:
             raise RuntimeError("code不能唯一确定一个合约")
@@ -347,11 +343,14 @@ class IBClient(EWrapper):
         key = "{}_{}_{}".format(host, port, client_id)
         cls.clients_map[key] = cli
 
-    def sub(self, account_subscriber: EWrapper = None, tick_subscriber: EWrapper = None):
+    def sub(self, account_subscriber: EWrapper = None, tick_subscriber: EWrapper = None,
+            market_data_subscriber: EWrapper = None):
         if account_subscriber:
             self.account_subscriber = account_subscriber
         if tick_subscriber:
             self.tick_subscriber = tick_subscriber
+        if market_data_subscriber:
+            self.market_data_subscriber = market_data_subscriber
 
 
 class IBAccount(AbstractAccount, EWrapper):
@@ -475,6 +474,7 @@ class IBAccount(AbstractAccount, EWrapper):
                     exec_filter = ExecutionFilter()
                     exec_filter.clientId = self.cli.cli.clientId
                     self.cli.cli.reqExecutions(req.req_id, exec_filter)
+
             while True:
                 try:
                     do_sync()
@@ -541,6 +541,9 @@ class IBAccount(AbstractAccount, EWrapper):
 
 class IBMinBar(TimeSeriesFunction):
 
+    def current_price(self, codes) -> Mapping[str, Price]:
+        raise NotImplementedError
+
     def do_sub(self, codes: List[str]):
         raise NotImplementedError
 
@@ -587,6 +590,14 @@ class IBMinBar(TimeSeriesFunction):
 
 class IBTick(TimeSeriesFunction, EWrapper):
 
+    def current_price(self, codes) -> Mapping[str, Price]:
+        ret = {}
+        for code in codes:
+            if code in self.lastest_tick:
+                tick = self.lastest_tick[code]
+                ret[code] = Price(code, tick.price, tick.visible_time)
+        return ret
+
     def tickByTickAllLast(self, reqId: int, tickType: int, time: int, price: float, size: int,
                           tickAttribLast: TickAttribLast, exchange: str, specialConditions: str):
         code = Request.find(reqId).code
@@ -624,7 +635,7 @@ class IBTick(TimeSeriesFunction, EWrapper):
         self.client = cli
         self.code_to_req: Mapping[str, Request] = {}
         self.lastest_tick: Mapping[str, Tick] = {}
-        self.start_check_realtime_data_thread()
+        # self.start_check_realtime_data_thread()
 
     def name(self) -> str:
         return "ibTick"
@@ -661,57 +672,60 @@ class IBTick(TimeSeriesFunction, EWrapper):
             logging.info("重新订阅，codes:{}".format(self.sub_codes))
             self.do_sub(self.sub_codes)
 
-    def start_check_realtime_data_thread(self, time_threshold=Timedelta(minutes=30)):
-        """
-        如果有订阅的话，会启动实时数据监控线程，监控逻辑是：如果当前时间是盘前交易时间段，看AAPL最近的价格数据的时间，如果其
-        价格数据的时间跟当前时间间隔超过阀值， 则认为获取实时数据是有问题的，发送监控告警
-        :return:
-        """
-        us_calendar: TradingCalendar = trading_calendars.get_calendar("NYSE")
-        pre_open_last = Timedelta(minutes=30, hours=5)
+    # def start_check_realtime_data_thread(self, time_threshold=Timedelta(minutes=30)):
+    #     """
+    #     如果有订阅的话，会启动实时数据监控线程，监控逻辑是：如果当前时间是盘前交易时间段，看AAPL最近的价格数据的时间，如果其
+    #     价格数据的时间跟当前时间间隔超过阀值， 则认为获取实时数据是有问题的，发送监控告警
+    #     :return:
+    #     """
+    #     us_calendar: TradingCalendar = trading_calendars.get_calendar("NYSE")
+    #     pre_open_last = Timedelta(minutes=30, hours=5)
+    #
+    #     @alarm(level=AlarmLevel.ERROR, target='检查最新价格')
+    #     def do_check():
+    #         if self.has_sub_us_asset():
+    #             now = Timestamp.now(tz='Asia/Shanghai')
+    #             next_open = us_calendar.next_open(now)
+    #             pre_open_start = next_open - pre_open_last
+    #             if (pre_open_start + time_threshold) < now < next_open:
+    #                 for code in self.sub_codes:
+    #                     if code not in self.lastest_tick:
+    #                         err_msg = "实时数据获取异常,没有{}的最新价格数据，当前时间:{}".format(code, now)
+    #                         raise RuntimeError(err_msg)
+    #                     else:
+    #                         tick: Tick = self.lastest_tick[code]
+    #                         if (now - tick.visible_time) > time_threshold:
+    #                             err_msg = "实时数据获取异常,{}的最新价格数据为：{}，当前时间:{}". \
+    #                                 format(code, tick.__dict__, now)
+    #                             raise RuntimeError(err_msg)
+    #                         else:
+    #                             logging.info("实时数据正常，{}的最新价格数据为：{}，当前时间:{}".
+    #                                          format(code, tick.__dict__, now))
+    #
+    #     def check_realtime_data():
+    #         while True:
+    #             try:
+    #                 logging.info("开始检查实时数据")
+    #                 do_check()
+    #             except:
+    #                 import traceback
+    #                 err_msg = "检查实时数据异常:{}".format(traceback.format_exc())
+    #                 logging.error(err_msg)
+    #             time.sleep(10 * 60)
+    #
+    #     threading.Thread(name="check_realtime_data", target=check_realtime_data).start()
 
-        @alarm(level=AlarmLevel.ERROR, target='检查最新价格')
-        def do_check():
-            if self.has_sub_us_asset():
-                now = Timestamp.now(tz='Asia/Shanghai')
-                next_open = us_calendar.next_open(now)
-                pre_open_start = next_open - pre_open_last
-                if (pre_open_start + time_threshold) < now < next_open:
-                    for code in self.sub_codes:
-                        if code not in self.lastest_tick:
-                            err_msg = "实时数据获取异常,没有{}的最新价格数据，当前时间:{}".format(code, now)
-                            raise RuntimeError(err_msg)
-                        else:
-                            tick: Tick = self.lastest_tick[code]
-                            if (now - tick.visible_time) > time_threshold:
-                                err_msg = "实时数据获取异常,{}的最新价格数据为：{}，当前时间:{}". \
-                                    format(code, tick.__dict__, now)
-                                raise RuntimeError(err_msg)
-                            else:
-                                logging.info("实时数据正常，{}的最新价格数据为：{}，当前时间:{}".
-                                             format(code, tick.__dict__, now))
-
-        def check_realtime_data():
-            while True:
-                try:
-                    logging.info("开始检查实时数据")
-                    do_check()
-                except:
-                    import traceback
-                    err_msg = "检查实时数据异常:{}".format(traceback.format_exc())
-                    logging.error(err_msg)
-                time.sleep(10 * 60)
-
-        threading.Thread(name="check_realtime_data", target=check_realtime_data).start()
-
-    def has_sub_us_asset(self):
-        for code in self.sub_codes:
-            if "USD" in code:
-                return True
-        return False
+    # def has_sub_us_asset(self):
+    #     for code in self.sub_codes:
+    #         if "USD" in code:
+    #             return True
+    #     return False
 
 
 class IBAdjustedDailyBar(TimeSeriesFunction):
+
+    def current_price(self, codes) -> Mapping[str, Price]:
+        raise NotImplementedError
 
     def name(self) -> str:
         return "ibAdjustedDailyBar"
@@ -769,3 +783,102 @@ class IBAdjustedDailyBar(TimeSeriesFunction):
             cli = IBClient(host, port, client_id)
             IBClient.registry(host, port, client_id, cli)
         self.client = cli
+
+
+class MarketData(TSData):
+    def __init__(self, ts_type_name: str, visible_time: Timestamp, code: str, values: Dict[str, object]):
+        super().__init__(ts_type_name, visible_time, code, values)
+
+
+class IBMarketData(TimeSeriesFunction, EWrapper):
+
+    def tickPrice(self, reqId: TickerId, tickType: TickType, price: float, attrib: TickAttrib):
+        req = Request.find(reqId)
+        code = req.code
+        if tickType == 4:
+            # 4表示last price
+            self.last_price[code] = price
+        values = {
+            'tick_type': tickType,
+            'value': price,
+            'attrib': attrib
+        }
+        md = MarketData(self.name(), Timestamp.now(tz='Asia/Shanghai'), code=code, values=values)
+        for sub in self.sub_map[code]:
+            sub.on_data(md)
+
+    def tickSize(self, reqId: TickerId, tickType: TickType, size: int):
+        code = Request.find(reqId).code
+        values = {
+            'tick_type': tickType,
+            'value': size,
+        }
+        md = MarketData(self.name(), Timestamp.now(tz='Asia/Shanghai'), code=code, values=values)
+        for sub in self.sub_map[code]:
+            sub.on_data(md)
+
+    def tickString(self, reqId: TickerId, tickType: TickType, value: str):
+        code = Request.find(reqId).code
+        if tickType == 45:
+            # 45表示last price time
+            last_time = Timestamp(int(value), unit='s', tz='Asia/Shanghai')
+            self.last_price_time[code] = last_time
+        values = {
+            'tick_type': tickType,
+            'value': value,
+        }
+        md = MarketData(self.name(), Timestamp.now(tz='Asia/Shanghai'), code=code, values=values)
+        for sub in self.sub_map[code]:
+            sub.on_data(md)
+
+    def name(self) -> str:
+        return 'ibMarketData'
+
+    def load_history_data(self, command: HistoryDataQueryCommand) -> List[TSData]:
+        raise NotImplementedError
+
+    def current_price(self, codes) -> Mapping[str, Price]:
+        ret = {}
+        for code in codes:
+            if code in self.last_price and code in self.last_price_time:
+                p = Price(code, self.last_price[code], self.last_price_time[code])
+                ret[code] = p
+        return ret
+
+    def load_assets(self) -> List[Asset]:
+        raise NotImplementedError
+
+    def do_sub(self, codes: List[str]):
+        for code in codes:
+            contract: Contract = self.client.code_to_contract(code)
+            req = Request.new_request()
+            self.client.cli.reqMktData(req.req_id, contract, '', False, False, None)
+            self.code_to_req[code] = req
+            req.code = code
+
+    def do_unsub(self, codes):
+        for code in codes:
+            req_id = self.code_to_req[code].req_id
+            self.client.cli.cancelMktData(req_id)
+            Request.clear(req_id)
+
+    def __init__(self, host, port, client_id):
+        super().__init__()
+
+        cli = IBClient.find_client(host, port, client_id)
+        if not cli:
+            cli = IBClient(host, port, client_id)
+            IBClient.registry(host, port, client_id, cli)
+        cli.sub(market_data_subscriber=self)
+        self.client = cli
+        self.code_to_req: Mapping[str, Request] = {}
+        self.last_price: Mapping[str, float] = {}
+        self.last_price_time: Mapping[str, Timestamp] = {}
+
+    def columns(self) -> List[Column]:
+        return []
+
+    def re_connected(self):
+        if len(self.sub_codes) > 0:
+            logging.info("重新订阅实时数据，codes:{}".format(self.sub_codes))
+            self.do_sub(self.sub_codes)

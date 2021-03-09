@@ -7,6 +7,7 @@ from enum import Enum
 from threading import Thread
 from typing import *
 
+import trading_calendars
 from pandas import DatetimeIndex, Series
 from pandas._libs.tslibs.timedeltas import Timedelta
 from pandas._libs.tslibs.timestamps import Timestamp
@@ -298,12 +299,13 @@ class TimeEventThread(Thread):
 class DataPortal(TimeSeriesSubscriber):
 
     def on_data(self, data: TSData):
-        if isinstance(data, Bar):
-            self._current_price_map[data.code] = Price(data.code, data.close_price, data.visible_time)
-        elif isinstance(data, Tick):
-            self._current_price_map[data.code] = Price(data.code, data.price, data.visible_time)
-        else:
-            raise RuntimeError(" wrong ts_data type")
+        pass
+        # if isinstance(data, Bar):
+        #     self._current_price_map[data.code] = Price(data.code, data.close_price, data.visible_time)
+        # elif isinstance(data, Tick):
+        #     self._current_price_map[data.code] = Price(data.code, data.price, data.visible_time)
+        # else:
+        #     raise RuntimeError(" wrong ts_data type")
 
     def history_data(self, ts_type_name, command: HistoryDataQueryCommand):
         ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ts_type_name)
@@ -311,12 +313,18 @@ class DataPortal(TimeSeriesSubscriber):
 
     def __init__(self, is_backtest: bool, ts_type_name_for_current_price: str, engine: Engine = None,
                  subscribe_codes: List[str] = None, mocked_current_prices: Dict[Timestamp, Dict[str, Price]] = {}):
+        self.ts_type_name_for_current_price = ts_type_name_for_current_price
+        self.is_backtest = is_backtest
+        self._current_price_map: Mapping[str, Price] = {}
+        self.mocked_current_price = mocked_current_prices
+        self.subscribe_codes = subscribe_codes
         if not is_backtest:
             if not subscribe_codes:
                 raise RuntimeError("need subscribe codes")
             ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
-            ts: TimeSeries = ts_repo.find_one(ts_type_name_for_current_price)
-            ts.subscribe(self, subscribe_codes)
+            self.realtime_ts: TimeSeries = ts_repo.find_one(ts_type_name_for_current_price)
+            self.realtime_ts.subscribe(self, subscribe_codes)
+            self.start_check_realtime_data_thread()
         else:
             if not engine:
                 raise RuntimeError("need engine")
@@ -327,10 +335,46 @@ class DataPortal(TimeSeriesSubscriber):
                                                   order=-100),
                                   self.set_current_price)
 
-        self.ts_type_name_for_current_price = ts_type_name_for_current_price
-        self.is_backtest = is_backtest
-        self._current_price_map: Mapping[str, Price] = {}
-        self.mocked_current_price = mocked_current_prices
+    def start_check_realtime_data_thread(self):
+        def do_check(code: str):
+            if 'USD' in code:
+                # 如果是盘前，允许有30分钟的延迟
+                # 如果是盘中，允许有1分钟的延迟
+                now = Timestamp.now(tz='Asia/Shanghai')
+                us_calendar: TradingCalendar = trading_calendars.get_calendar("NYSE")
+                pre_open_last = Timedelta(minutes=30, hours=5)
+                pre_open_allowed_delay = Timedelta(minutes=30)
+                market_open_allowed_delay = Timedelta(minutes=1)
+
+                next_close = us_calendar.next_close(now)
+                previous_open = us_calendar.previous_open(next_close)
+                pre_open_start = previous_open - pre_open_last
+                if pre_open_start+pre_open_allowed_delay < now < previous_open:
+                    try:
+                        self.current_price([code], now, pre_open_allowed_delay)
+                    except:
+                        import traceback
+                        logging.error("{}".format(traceback.format_exc()))
+                elif previous_open < now < next_close:
+                    try:
+                        self.current_price([code], now, market_open_allowed_delay)
+                    except:
+                        import traceback
+                        logging.error("{}".format(traceback.format_exc()))
+
+        def check_realtime_data():
+            while True:
+                try:
+                    logging.info("开始检查实时数据")
+                    for code in self.subscribe_codes:
+                        do_check(code)
+                except:
+                    import traceback
+                    err_msg = "检查实时数据异常:{}".format(traceback.format_exc())
+                    logging.error(err_msg)
+                time.sleep(10 * 60)
+
+        threading.Thread(name="check_realtime_data", target=check_realtime_data).start()
 
     @alarm(level=AlarmLevel.ERROR, target="获取最新价格")
     @retry(limit=10, interval=1)
@@ -340,21 +384,25 @@ class DataPortal(TimeSeriesSubscriber):
             cp = self.mocked_current_price[current_time]
             return {code: cp[code] for code in codes}
         else:
-            # 获取线上数据的逻辑
-            res = {}
+            # 如果是回测，从本地缓存中获取
+            # 如果是实盘，从时序数据获取
+            ret = {}
+            if self.is_backtest:
+                for code in codes:
+                    if code in self._current_price_map:
+                        ret[code] = self._current_price_map[code]
+            else:
+                ret = self.realtime_ts.func.current_price(codes)
+            # 检查数据是否缺失或者有延迟
             for code in codes:
-                if code in self._current_price_map:
-                    price = self._current_price_map[code]
-                    # 检查价格的延迟
-                    if delay_allowed:
-                        if current_time - price.time > delay_allowed:
-                            raise RuntimeError("没有获取到{}的最新价格，当前时间:{}, 最新价格:{}, 允许的延迟:{}".
-                                               format(code, current_time, price.__dict__, delay_allowed))
-                    res[code] = price
-                else:
+                if code not in ret:
                     raise RuntimeError("没有获取到{}的最新价格，当前时间:{}".format(code, current_time))
-
-            return res
+                price = ret[code]
+                if delay_allowed:
+                    if current_time - price.time > delay_allowed:
+                        raise RuntimeError("没有获取到{}的最新价格，当前时间:{}, 最新价格:{}, 允许的延迟:{}".
+                                           format(code, current_time, price.__dict__, delay_allowed))
+            return ret
 
     def set_current_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         if isinstance(event.data, Bar):
@@ -364,6 +412,8 @@ class DataPortal(TimeSeriesSubscriber):
             self._current_price_map[event.data.code] = Price(event.data.code, event.data.price, event.visible_time)
         else:
             raise RuntimeError("wrong event data")
+
+
 
 
 class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
@@ -537,7 +587,7 @@ class Engine(EventSubscriber):
         self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=10)),
                             calc_net_value)
         self.account = account
-        self.data_portal = DataPortal(False, "ibTick", subscribe_codes=strategy.scope.codes,
+        self.data_portal = DataPortal(False, "ibMarketData", subscribe_codes=strategy.scope.codes,
                                       mocked_current_prices=mocked_current_prices)
         strategy.initialize(self, self.data_portal)
         if not mocked_events_generator:
