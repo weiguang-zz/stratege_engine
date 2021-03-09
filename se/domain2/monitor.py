@@ -22,7 +22,7 @@ class EscapeParam(object):
 
 def do_alarm(target: str, level: AlarmLevel, params: str, return_obj: object, exception: str):
     title = "[{}]".format(target)
-    if level == AlarmLevel.ERROR:
+    if exception:
         title = '{}ERROR'.format(title)
     content = "params:{}, return_obj:{}, exception:{}". \
         format(params,
@@ -48,6 +48,7 @@ def build_params_str(*args, **kwargs):
             kwargs_dict[k] = kwargs[k].__dict__.copy()
         else:
             kwargs_dict[k] = kwargs[k]
+    args_list_copy = args_list.copy()
     if escape_params:
         for escape_param in escape_params:
             if escape_param.key in kwargs_dict:
@@ -61,13 +62,13 @@ def build_params_str(*args, **kwargs):
                 if escape_param.index >= len(args_list) or escape_param.index < 0:
                     continue
                 if escape_param.property_name:
-                    v = args_list[escape_param.index]
+                    v = args_list_copy[escape_param.index]
                     if isinstance(v, dict):
                         v.pop(escape_param.property_name)
                 else:
-                    args_list.pop(escape_param.index)
+                    args_list_copy.remove(args_list[escape_param.index])
 
-    params = {'args': args_list, 'kwargs': kwargs_dict}
+    params = {'args': args_list_copy, 'kwargs': kwargs_dict}
     return str(params)
 
 

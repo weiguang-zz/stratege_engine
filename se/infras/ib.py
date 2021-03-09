@@ -411,15 +411,15 @@ class IBAccount(AbstractAccount, EWrapper):
         order: Order = self.ib_order_id_to_order[orderId]
         # 下面只需要处理下单失败的情况，比如因为合约不可卖空导致的失败，这种情况需要将订单状态置为FAILED
 
-        if status == 'Submitted':
+        if status == 'Submitted' and order.status != OrderStatus.SUBMITTED:
             order.status = OrderStatus.SUBMITTED
             if self.order_callback:
                 self.order_callback.order_status_change(order, self)
-        elif status == 'Inactive':
+        elif status == 'Inactive' and order.status != OrderStatus.FAILED:
             order.status = OrderStatus.FAILED
             if self.order_callback:
                 self.order_callback.order_status_change(order, self)
-        elif status == 'Cancelled':
+        elif status == 'Cancelled' and order.status != OrderStatus.CANCELED:
             order.status = OrderStatus.CANCELED
             if self.order_callback:
                 self.order_callback.order_status_change(order, self)
@@ -504,14 +504,13 @@ class IBAccount(AbstractAccount, EWrapper):
             ib_order.action = 'BUY' if order.direction == OrderDirection.BUY else 'SELL'
             # 设置自适应算法
             ib_order.algoStrategy = 'Adaptive'
-            ib_order.algoParams = [TagValue("adaptivePriority", 'Normal')]
+            ib_order.algoParams = [TagValue("adaptivePriority", 'Urgent')]
         elif isinstance(order, LimitOrder):
             ib_order.orderType = "LMT"
             ib_order.totalQuantity = order.quantity
             # 价格调整到两位小数
             ib_order.lmtPrice = round(order.limit_price, 2)
             ib_order.action = 'BUY' if order.direction == OrderDirection.BUY else 'SELL'
-            ib_order.outsideRth = True
         else:
             # 穿越单和延迟单转化为IB的条件单
             if isinstance(order, DelayMKTOrder):

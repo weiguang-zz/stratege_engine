@@ -15,7 +15,7 @@ from trading_calendars import TradingCalendar
 from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Tick, OrderCallback, AccountRepo, \
     LimitOrder, OrderStatus, MKTOrder
 from se.domain2.domain import BeanContainer
-from se.domain2.monitor import alarm, AlarmLevel, EscapeParam, do_alarm, retry
+from se.domain2.monitor import alarm, AlarmLevel, EscapeParam, do_alarm, retry, do_log
 from se.domain2.time_series.time_series import TimeSeriesRepo, HistoryDataQueryCommand, TimeSeriesSubscriber, TSData, \
     Price, TimeSeries
 import numpy as np
@@ -369,6 +369,7 @@ class DataPortal(TimeSeriesSubscriber):
 class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
 
     @alarm(target="订单状态变更", escape_params=[EscapeParam(index=0, key='self'), EscapeParam(index=2, key='account')])
+    @do_log(target_name="订单状态变更", escape_params=[EscapeParam(index=0, key='self'), EscapeParam(index=2, key='account')])
     def order_status_change(self, order, account):
         self.do_order_status_change(order, account)
 
@@ -452,7 +453,8 @@ class EventLine(object):
 def calc_net_value(event: Event, account: AbstractAccount, data_portal: DataPortal):
     if len(account.positions) > 0:
         current_price: Mapping[str, Price] = data_portal.current_price(list(account.positions.keys()),
-                                                                       event.visible_time)
+                                                                       event.visible_time,
+                                                                       delay_allowed=Timedelta(seconds=20))
         cp = {code: current_price[code].price for code in current_price.keys()}
     else:
         cp = {}
@@ -532,7 +534,7 @@ class Engine(EventSubscriber):
             if not mocked_events_generator or not mocked_current_prices:
                 raise RuntimeError("需要mocked_events_generator， mocked_current_prices")
 
-        self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(minute_offset=30)),
+        self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=10)),
                             calc_net_value)
         self.account = account
         self.data_portal = DataPortal(False, "ibTick", subscribe_codes=strategy.scope.codes,
