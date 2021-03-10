@@ -60,4 +60,9 @@ ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
 ts: TimeSeries = ts_repo.find_one('ibMarketData')
 ts.subscribe(MySub(), ['CL_FUT_USD_NYMEX_202104'])
 
-print('done')
+while True:
+    import time
+    time.sleep(2)
+    cp = ts.func.current_price([code])
+    if code in cp:
+        print("当前价格:{}".format(cp[code].__dict__))

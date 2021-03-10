@@ -11,6 +11,7 @@ from se.domain2.time_series.time_series import TimeSeriesRepo, TimeSeries, DataR
 from se.infras.ib import IBAccount
 from se.infras.models import TimeSeriesModel, DataRecordModel, TimeSeriesDataModel, AccountModel, \
     UserOrderModel, UserOrderExecutionModel
+import logging
 
 
 class AccountRepoImpl(AccountRepo):
@@ -35,6 +36,7 @@ class AccountRepoImpl(AccountRepo):
         account.orders = [self._to_order(om) for om in account_model.orders]
         # account.current_operation = self._to_operation(account_model.current_operation)
         # account.history_operations = [self._to_operation(op) for op in account_model.history_operations]
+        logging.info("账户加载成功, 当前持仓:{}, 现金:{}".format(account.positions, account.cash))
         return account
 
     def save(self, account: AbstractAccount):
