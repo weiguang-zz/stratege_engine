@@ -837,9 +837,10 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
         if tickType == 48:
             # 45表示RTVolume
             values = value.split(';')
-            price_time = Timestamp(int(values[2]), unit='ms', tz='Asia/Shanghai')
-            p = Price(code, float(values[0]), price_time)
-            self.latest_price[code] = p
+            if len(values[0]) > 0:
+                price_time = Timestamp(int(values[2]), unit='ms', tz='Asia/Shanghai')
+                p = Price(code, float(values[0]), price_time)
+                self.latest_price[code] = p
         values = {
             'tick_type': tickType,
             'value': value,
