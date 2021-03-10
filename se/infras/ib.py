@@ -68,28 +68,44 @@ class IBClient(EWrapper):
 
     def tickByTickAllLast(self, reqId: int, tickType: int, time: int, price: float, size: int,
                           tickAttribLast: TickAttribLast, exchange: str, specialConditions: str):
-        super().tickByTickAllLast(reqId, tickType, time, price, size, tickAttribLast, exchange, specialConditions)
-        if self.tick_subscriber:
-            self.tick_subscriber.tickByTickAllLast(reqId, tickType, time, price, size, tickAttribLast,
-                                                   exchange, specialConditions)
+        try:
+            super().tickByTickAllLast(reqId, tickType, time, price, size, tickAttribLast, exchange, specialConditions)
+            if self.tick_subscriber:
+                self.tick_subscriber.tickByTickAllLast(reqId, tickType, time, price, size, tickAttribLast,
+                                                       exchange, specialConditions)
+        except:
+            import traceback
+            logging.error("{}".format(traceback.format_exc()))
 
     def execDetails(self, reqId: int, contract: Contract, execution: Execution):
-        super().execDetails(reqId, contract, execution)
-        if self.account_subscriber:
-            self.account_subscriber.execDetails(reqId, contract, execution)
+        try:
+            super().execDetails(reqId, contract, execution)
+            if self.account_subscriber:
+                self.account_subscriber.execDetails(reqId, contract, execution)
+        except:
+            import traceback
+            logging.error("{}".format(traceback.format_exc()))
 
     def commissionReport(self, commissionReport: CommissionReport):
-        super().commissionReport(commissionReport)
-        if self.account_subscriber:
-            self.account_subscriber.commissionReport(commissionReport)
+        try:
+            super().commissionReport(commissionReport)
+            if self.account_subscriber:
+                self.account_subscriber.commissionReport(commissionReport)
+        except:
+            import traceback
+            logging.error("{}".format(traceback.format_exc()))
 
     def orderStatus(self, orderId: OrderId, status: str, filled: float, remaining: float, avgFillPrice: float,
                     permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
-        super().orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId,
-                            whyHeld, mktCapPrice)
-        if self.account_subscriber:
-            self.account_subscriber.orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId,
-                                                lastFillPrice, clientId, whyHeld, mktCapPrice)
+        try:
+            super().orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId,
+                                whyHeld, mktCapPrice)
+            if self.account_subscriber:
+                self.account_subscriber.orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId,
+                                                    lastFillPrice, clientId, whyHeld, mktCapPrice)
+        except:
+            import traceback
+            logging.error("{}".format(traceback.format_exc()))
 
     def historicalData(self, reqId: int, bar: BarData):
         super().historicalData(reqId, bar)
