@@ -5,12 +5,14 @@ from email.header import Header
 from email.mime.text import MIMEText
 from smtplib import SMTP_SSL
 
+
+
 os.environ['config.dir'] = "/Users/zhang/PycharmProjects/strategy_engine_v2/interface"
 # 如果没有日志目录的话，则创建
 if not os.path.exists("log"):
     os.makedirs("log")
 
-from interface.test.test_strategy import TestStrategy3
+from se.domain2.domain import send_email
 
 from ibapi.common import BarData
 from trading_calendars import get_calendar
@@ -306,20 +308,26 @@ from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber,
 # from se.domain2.domain import send_email
 # send_email("haha", "sssss")
 
-from se import config
-from ibapi.order import Order as IBOrder
-
-account_name = "test"
-acc = IBAccount(account_name, 10000)
-acc.with_client(config.get('ib_account', 'host'), config.getint('ib_account', 'port'),
-                config.getint('ib_account', 'client_id'))
-code = 'GSX_STK_USD_SMART'
-contract = acc.cli.code_to_contract(code)
-ib_order: IBOrder = IBOrder()
-ib_order.orderType = "LMT"
-ib_order.totalQuantity = order.quantity
-# 价格调整到两位小数
-ib_order.lmtPrice = round(order.limit_price, 2)
-ib_order.action = 'BUY' if order.direction == OrderDirection.BUY else 'SELL'
-ib_order.outsideRth = True
-acc.cli.placeOrder()
+# from se import config
+# from ibapi.order import Order as IBOrder
+#
+# account_name = "test"
+# acc = IBAccount(account_name, 10000)
+# acc.with_client(config.get('ib_account', 'host'), config.getint('ib_account', 'port'),
+#                 config.getint('ib_account', 'client_id'))
+# code = 'GSX_STK_USD_SMART'
+# contract = acc.cli.code_to_contract(code)
+# ib_order: IBOrder = IBOrder()
+# ib_order.orderType = "LMT"
+# ib_order.totalQuantity = order.quantity
+# # 价格调整到两位小数
+# ib_order.lmtPrice = round(order.limit_price, 2)
+# ib_order.action = 'BUY' if order.direction == OrderDirection.BUY else 'SELL'
+# ib_order.outsideRth = True
+# acc.cli.placeOrder()
+# from se import config
+# print('ss:{}'.format(config.__dict__))
+while True:
+    send_email("test", 'test')
+    import time
+    time.sleep(2)

@@ -7,8 +7,8 @@ from smtplib import SMTP_SSL
 from typing import Mapping
 import threading
 
-class BeanContainer(object):
 
+class BeanContainer(object):
     beans: Mapping[type, object] = {}
 
     @classmethod
@@ -42,22 +42,25 @@ def send_email(title: str, content: str):
                 break
             except:
                 import traceback
-                logging.warning("发送邮件失败 {}".format(traceback.format_exc()))
+                logging.warning("发送邮件失败 {},邮件配置:{}".format(traceback.format_exc(), config.__dict__))
                 import time
                 time.sleep(10)
 
     threading.Thread(name='send_email', target=send_with_retry).start()
 
 
-
-
 @synchronized
 def do_send_email(title: str, content: str, config: ConfigParser):
     # 登录
+    logging.info("开始发送邮件")
     smtp = SMTP_SSL(config.get('email', 'host_server'))
     smtp.set_debuglevel(0)
     smtp.ehlo(config.get('email', 'host_server'))
-    smtp.login(config.get('email', 'username'), config.get('email', 'password'))
+    passwords = config.get('email', 'password').split(",")
+    import random
+    k = random.randint(0, len(passwords)-1)
+    password = passwords[k]
+    smtp.login(config.get('email', 'username'), password)
 
     title = '[{}]{}'.format(config.get("ib_account", "name"), title)
     sender_email = config.get('email', 'sender_email')
