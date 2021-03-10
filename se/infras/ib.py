@@ -411,7 +411,7 @@ class IBAccount(AbstractAccount, EWrapper):
         order: Order = self.ib_order_id_to_order[orderId]
         # 下面只需要处理下单失败的情况，比如因为合约不可卖空导致的失败，这种情况需要将订单状态置为FAILED
 
-        if status == 'Submitted' and order.status != OrderStatus.SUBMITTED:
+        if (status == 'Submitted' or status == 'PreSubmitted') and order.status != OrderStatus.SUBMITTED:
             order.status = OrderStatus.SUBMITTED
             if self.order_callback:
                 self.order_callback.order_status_change(order, self)
@@ -437,6 +437,8 @@ class IBAccount(AbstractAccount, EWrapper):
         time.sleep(2)
         if order.status == OrderStatus.FAILED or order.status == OrderStatus.CREATED \
                 or order.status == OrderStatus.CANCELED:
+            if order.status == OrderStatus.CREATED:
+                self.cancel_open_order(order)
             raise RuntimeError("place order error")
 
     def match(self, data):
