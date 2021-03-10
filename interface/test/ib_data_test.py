@@ -7,13 +7,18 @@ from smtplib import SMTP_SSL
 
 from ibapi.contract import Contract
 from ibapi.tag_value import TagValue
+from pandas._libs.tslibs.timestamps import Timestamp
+
+
 
 os.environ['config.dir'] = "/Users/zhang/PycharmProjects/strategy_engine_v2/interface"
 # 如果没有日志目录的话，则创建
 if not os.path.exists("log"):
     os.makedirs("log")
 
-from se import config
+from se.domain2.time_series.time_series import TimeSeries, TimeSeriesRepo, TimeSeriesSubscriber, TSData
+from se.domain2.engine.engine import DataPortal
+from se import config, BeanContainer
 from ibapi.order import Order as IBOrder
 from se.infras.ib import IBAccount, IBClient, Request
 
@@ -34,6 +39,25 @@ contract.lastTradeDateOrContractMonth = "202104"
 # contract.exchange = "SEHK"
 # contract.currency = "HKD"
 #
-req = Request.new_request()
-client.cli.reqTickByTickData(req.req_id, contract, "AllLast", 0, False)
-# client.cli.reqContractDetails(req.req_id, contract)
+# req = Request.new_request()
+# # client.cli.reqTickByTickData(req.req_id, contract, "AllLast", 0, False)
+# # client.cli.reqContractDetails(req.req_id, contract)
+# client.cli.reqMktData(req.req_id, contract, '', False, False, None)
+code = 'CL_FUT_USD_NYMEX_202104'
+# code = 'GSX_STK_USD_SMART'
+dp: DataPortal = DataPortal(is_backtest=False, ts_type_name_for_current_price='ibMarketData',
+                            subscribe_codes=[code])
+# cp = dp.current_price([code], Timestamp.now(tz='Asia/Shanghai'))
+# print("cp:{}".format(cp))
+
+class MySub(TimeSeriesSubscriber):
+
+    def on_data(self, data: TSData):
+        print(str(data.__dict__))
+
+
+ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+ts: TimeSeries = ts_repo.find_one('ibMarketData')
+ts.subscribe(MySub(), ['CL_FUT_USD_NYMEX_202104'])
+
+print('done')

@@ -201,9 +201,9 @@ class TimeSeriesFunction(metaclass=ABCMeta):
     def load_history_data(self, command: HistoryDataQueryCommand) -> List[TSData]:
         pass
 
-    # @abstractmethod
-    # def current_price(self, codes) -> Mapping[str, Price]:
-    #     pass
+    @abstractmethod
+    def current_price(self, codes) -> Mapping[str, Price]:
+        pass
 
     @abstractmethod
     def load_assets(self) -> List[Asset]:
