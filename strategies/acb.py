@@ -131,7 +131,7 @@ class ACBStrategy(AbstractStrategy):
                                                                                         current_price,
                                                                                         ACBStrategy.__doc__)
             if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_position)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
                 order.with_reason(reason)
                 account.place_order(order)
                 self.ensure_order_filled(account, data_portal, order, period=20, retry_count=1)
