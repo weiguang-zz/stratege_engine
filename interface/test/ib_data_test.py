@@ -50,14 +50,14 @@ dp: DataPortal = DataPortal(is_backtest=False, ts_type_name_for_current_price='i
 # cp = dp.current_price([code], Timestamp.now(tz='Asia/Shanghai'))
 # print("cp:{}".format(cp))
 
-# class MySub(TimeSeriesSubscriber):
-#
-#     def on_data(self, data: TSData):
-#         print(str(data.__dict__))
-#
-#
-# ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
-# ts: TimeSeries = ts_repo.find_one('ibMarketData')
-# ts.subscribe(MySub(), ['CL_FUT_USD_NYMEX_202104'])
+class MySub(TimeSeriesSubscriber):
+
+    def on_data(self, data: TSData):
+        print(str(data.__dict__))
+
+
+ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+ts: TimeSeries = ts_repo.find_one('ibMarketData')
+ts.subscribe(MySub(), ['CL_FUT_USD_NYMEX_202104'])
 
 print('done')

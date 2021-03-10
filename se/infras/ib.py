@@ -795,9 +795,6 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
     def tickPrice(self, reqId: TickerId, tickType: TickType, price: float, attrib: TickAttrib):
         req = Request.find(reqId)
         code = req.code
-        if tickType == 4:
-            # 4表示last price
-            self.last_price[code] = price
         values = {
             'tick_type': tickType,
             'value': price,
@@ -819,10 +816,12 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
 
     def tickString(self, reqId: TickerId, tickType: TickType, value: str):
         code = Request.find(reqId).code
-        if tickType == 45:
-            # 45表示last price time
-            last_time = Timestamp(int(value), unit='s', tz='Asia/Shanghai')
-            self.last_price_time[code] = last_time
+        if tickType == 48:
+            # 45表示RTVolume
+            values = value.split(';')
+            price_time = Timestamp(int(values[2]), unit='ms', tz='Asia/Shanghai')
+            p = Price(code, float(values[0]), price_time)
+            self.latest_price[code] = p
         values = {
             'tick_type': tickType,
             'value': value,
@@ -840,9 +839,8 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
     def current_price(self, codes) -> Mapping[str, Price]:
         ret = {}
         for code in codes:
-            if code in self.last_price and code in self.last_price_time:
-                p = Price(code, self.last_price[code], self.last_price_time[code])
-                ret[code] = p
+            if code in self.latest_price:
+                ret[code] = self.latest_price[code]
         return ret
 
     def load_assets(self) -> List[Asset]:
@@ -852,7 +850,7 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
         for code in codes:
             contract: Contract = self.client.code_to_contract(code)
             req = Request.new_request()
-            self.client.cli.reqMktData(req.req_id, contract, '', False, False, None)
+            self.client.cli.reqMktData(req.req_id, contract, '233', False, False, None)
             self.code_to_req[code] = req
             req.code = code
 
@@ -872,8 +870,7 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
         cli.sub(market_data_subscriber=self)
         self.client = cli
         self.code_to_req: Mapping[str, Request] = {}
-        self.last_price: Mapping[str, float] = {}
-        self.last_price_time: Mapping[str, Timestamp] = {}
+        self.latest_price: Mapping[str, Price] = {}
 
     def columns(self) -> List[Column]:
         return []
