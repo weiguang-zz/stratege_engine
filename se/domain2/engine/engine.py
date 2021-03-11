@@ -418,7 +418,7 @@ class DataPortal(TimeSeriesSubscriber):
 
 class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
 
-    @alarm(target="订单状态变更", escape_params=[EscapeParam(index=0, key='self'), EscapeParam(index=2, key='account')])
+    # @alarm(target="订单状态变更", escape_params=[EscapeParam(index=0, key='self'), EscapeParam(index=2, key='account')])
     @do_log(target_name="订单状态变更", escape_params=[EscapeParam(index=0, key='self'), EscapeParam(index=2, key='account')])
     def order_status_change(self, order, account):
         self.do_order_status_change(order, account)
