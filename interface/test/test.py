@@ -22,7 +22,7 @@ import pandas as pd
 
 from pandas._libs.tslibs.timestamps import Timestamp
 
-from se.domain2.account.account import LimitOrder, OrderDirection, MKTOrder
+from se.domain2.account.account import LimitOrder, OrderDirection, MKTOrder, OrderStatus
 from se.infras.ib import IBAccount, IBClient
 
 from se import BeanContainer, TimeSeriesRepo
@@ -327,7 +327,8 @@ from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber,
 # acc.cli.placeOrder()
 # from se import config
 # print('ss:{}'.format(config.__dict__))
+
 while True:
     send_email("test", 'test')
     import time
-    time.sleep(2)
+    time.sleep(200)

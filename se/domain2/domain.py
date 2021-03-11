@@ -65,6 +65,8 @@ def do_send_email(title: str, content: str, config: ConfigParser):
     title = '[{}]{}'.format(config.get("ib_account", "name"), title)
     sender_email = config.get('email', 'sender_email')
     receiver = config.get('email', 'receiver')
+    # 替换掉content中的< >字符
+    content = content.replace('<', '[').replace('>', ']')
     msg = MIMEText(content, "plain", 'utf-8')
     msg["Subject"] = Header(title, 'utf-8')
     msg["From"] = sender_email

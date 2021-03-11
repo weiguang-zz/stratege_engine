@@ -368,8 +368,8 @@ class AbstractAccount(metaclass=ABCMeta):
             open_order.cancel()
             self.order_callback.order_status_change(open_order, self)
 
-    @do_log(target_name='订单成交', escape_params=[EscapeParam(index=0, key='self')])
-    @alarm(level=AlarmLevel.NORMAL, target='订单成交', escape_params=[EscapeParam(index=0, key='self')])
+    # @do_log(target_name='订单成交', escape_params=[EscapeParam(index=0, key='self')])
+    # @alarm(level=AlarmLevel.NORMAL, target='订单成交', escape_params=[EscapeParam(index=0, key='self')])
     def order_filled(self, order: Order, execution: OrderExecution):
         if execution.id in order.execution_map:
             old_execution = order.execution_map[execution.id]
