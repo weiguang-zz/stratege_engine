@@ -438,7 +438,8 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
             try:
                 time.sleep(period)
                 logging.info("ensure order filled thread start")
-                if order.status == OrderStatus.CREATED or order.status == OrderStatus.PARTIAL_FILLED:
+                if order.status == OrderStatus.CREATED or order.status == OrderStatus.PARTIAL_FILLED \
+                        or order.status == OrderStatus.SUBMITTED:
                     account.cancel_open_order(order)
                     # 保证下单的总价值是相同的
                     remain_quantity = order.quantity - order.filled_quantity

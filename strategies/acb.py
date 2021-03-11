@@ -133,7 +133,7 @@ class ACBStrategy(AbstractStrategy):
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=20, retry_count=1)
+                self.ensure_order_filled(account, data_portal, order, period=40, retry_count=1)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)
