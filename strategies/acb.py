@@ -124,8 +124,7 @@ class ACBStrategy(AbstractStrategy):
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
 
-            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(event.visible_time,
-                                                                                        current_position,
+            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(current_position,
                                                                                         net_value, dest_position,
                                                                                         self.last_close,
                                                                                         current_price,
