@@ -1,26 +1,22 @@
 import logging
 
-from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder, Order, OrderStatus
-from se.domain2.domain import send_email
+from se.domain2.account.account import AbstractAccount, MKTOrder, OrderDirection, LimitOrder
 from se.domain2.engine.engine import AbstractStrategy, Engine, EventDefinition, EventDefinitionType, MarketOpen, \
     MarketClose, Event, DataPortal
 from se.domain2.time_series.time_series import HistoryDataQueryCommand
 
 
-class ACBStrategy(AbstractStrategy):
+class SPCEStrategy(AbstractStrategy):
     """
-    该策略会在收盘的时候，检查今日收盘是否大于今日开盘，如果大于，则做多
-    会在开盘的时候，判断昨日收盘是否大于昨日开盘，如果大于，则做空
-    交易标的： ACB
+    该策略会在收盘的时候，检查今天收盘是否大于昨日收盘，如果大于，则以市价买入，并持有到下一个开盘卖出
+    会在开盘的时候判断，如果昨天日内上涨，则在开盘的时候进行卖空，并且在收盘的时候平仓
+    交易标的： SPCE
     回测结果：
-        最大回撤:-0.18198627729641348
-        胜率:0.6722222222222223
-        年化夏普:5.256477163933315
-        平均盈利:0.05729046297931058, 平均亏损:-0.038921799742595936
+        最大回撤:-0.2359915731707678
+        胜率:0.6387434554973822
+        年化夏普:4.571345500751706
+        平均盈利:0.049463270533594325, 平均亏损:-0.037356983399675504
     """
-
-    def do_order_status_change(self, order, account):
-        pass
 
     def do_initialize(self, engine: Engine, data_portal: DataPortal):
         if engine.is_backtest:
@@ -32,8 +28,10 @@ class ACBStrategy(AbstractStrategy):
             market_close_set_price = EventDefinition(ed_type=EventDefinitionType.TIME,
                                                      time_rule=MarketClose())
             engine.register_event(market_close_set_price, self.set_close_price)
+
         engine.register_event(market_open, self.market_open)
         engine.register_event(market_close, self.market_close)
+
         # 初始化昨日开盘价和收盘价
         self.last_open = None
         self.last_close = None
@@ -48,17 +46,12 @@ class ACBStrategy(AbstractStrategy):
                              .format(self.last_open, self.last_close, df.iloc[-1]['start_time']))
             else:
                 raise RuntimeError("没有获取到昨日开盘价和收盘价")
-            # self.last_open = 11.19
-            # self.last_close = 11.03
+            # self.last_open = 35.17
+            # self.last_close = 33.77
 
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
-
-    def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
-        current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
-        self.last_close = current_price
-        logging.info("设置收盘价为:{}".format(current_price))
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
@@ -66,12 +59,12 @@ class ACBStrategy(AbstractStrategy):
         net_value = None
 
         # 等待直到获取到最新的股票价格
+        # 等待直到获取到最新的股票价格
         current_price = None
         try:
             current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
         except:
             logging.error("没有获取到当天的开盘价,code:{}".format(self.code))
-
         if current_price:
             net_value = account.net_value({self.code: current_price})
 
@@ -86,14 +79,13 @@ class ACBStrategy(AbstractStrategy):
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
             reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, strategy:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
-                        current_price, ACBStrategy.__doc__)
+                        current_price, SPCEStrategy.__doc__)
             if current_price:
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=60, retry_count=1)
+                self.ensure_order_filled(account, data_portal, order, 30, 3)
             else:
-                logging.warning("没有获取到当前价格，将会以市价单下单")
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)
                 account.place_order(order)
@@ -104,6 +96,11 @@ class ACBStrategy(AbstractStrategy):
             logging.info(msg)
 
         self.last_open = current_price
+
+    def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
+        current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
+        self.last_close = current_price
+        logging.info("设置收盘价为:{}".format(current_price))
 
     def market_close(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
@@ -119,7 +116,7 @@ class ACBStrategy(AbstractStrategy):
         if current_price:
             net_value = account.net_value({self.code: current_price})
 
-        if current_price and self.last_open and current_price > self.last_open:
+        if current_price and self.last_close and current_price > self.last_close:
             dest_position = int(net_value / current_price)
 
         if len(account.positions) > 0:
@@ -128,17 +125,16 @@ class ACBStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-
-            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(current_position,
-                                                                                        net_value, dest_position,
-                                                                                        self.last_close,
-                                                                                        current_price,
-                                                                                        ACBStrategy.__doc__)
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(event.visible_time,
+                                                                                  current_position,
+                                                                                  net_value, dest_position,
+                                                                                  self.last_close,
+                                                                                  current_price, SPCEStrategy.__doc__)
             if current_price:
                 order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=40, retry_count=1)
+                self.ensure_order_filled(account, data_portal, order, 40, 1)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)
@@ -152,3 +148,6 @@ class ACBStrategy(AbstractStrategy):
                                 current_price))
 
         self.last_close = current_price
+
+    def do_order_status_change(self, order, account):
+        pass

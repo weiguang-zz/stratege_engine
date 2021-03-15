@@ -15,7 +15,7 @@ if not os.path.exists("log"):
 from se.domain2.domain import send_email
 
 from ibapi.common import BarData
-from trading_calendars import get_calendar
+from trading_calendars import get_calendar, TradingCalendar
 
 from se.domain2.engine.engine import Engine, Scope, DataPortal
 import pandas as pd
@@ -328,7 +328,13 @@ from se.domain2.time_series.time_series import TimeSeries, TimeSeriesSubscriber,
 # from se import config
 # print('ss:{}'.format(config.__dict__))
 
-while True:
-    send_email("test", 'test')
-    import time
-    time.sleep(200)
+# while True:
+#     send_email("test", 'test')
+#     import time
+#     time.sleep(200)
+
+from trading_calendars import get_calendar
+calendar: TradingCalendar = get_calendar("NYSE")
+o = calendar.next_open(Timestamp.now(tz='Asia/Shanghai'))
+
+print('done')
