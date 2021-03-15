@@ -545,7 +545,7 @@ class Engine(EventSubscriber):
             raise RuntimeError("account name重复")
         data_portal = DataPortal(True, ts_type_name_for_match, self)
         strategy.initialize(self, data_portal)
-        self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(minute_offset=30)),
+        self.register_event(EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(), order=1000),
                             calc_net_value)
         self.register_event(EventDefinition(ed_type=EventDefinitionType.DATA, ts_type_name=ts_type_name_for_match,
                                             event_data_type=EventDataType.BAR,
