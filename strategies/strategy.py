@@ -204,6 +204,12 @@ class TestStrategy3(AbstractStrategy):
         if current_price:
             net_value = account.net_value({self.code: current_price})
 
+        current_bid_ask = None
+        try:
+            current_bid_ask = data_portal.current_bid_ask([self.code])[self.code]
+        except:
+            logging.error("没有获取到最新的买卖价， code:{}".format(self.code))
+
         if self.last_close_price and current_price:
             if np.log(current_price / self.last_close_price) < 0.025:
                 dest_position = int(net_value / current_price)
@@ -215,14 +221,18 @@ class TestStrategy3(AbstractStrategy):
 
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日开盘价：{}, strategy:{}" \
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日开盘价：{}, 最新买卖价:{}, strategy:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_close_price,
-                        current_price, TestStrategy3.__doc__)
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                        current_price, current_bid_ask.__dict__ if current_bid_ask else None, TestStrategy3.__doc__)
+            if current_bid_ask:
+                delta = 0.01
+                limit_price = (current_bid_ask.bid_price + delta) if direction == OrderDirection.BUY else (
+                        current_bid_ask.ask_price - delta)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=30, retry_count=3)
+                # self.ensure_order_filled(account, data_portal, order, period=30, retry_count=3)
+                self.ensure_order_filled_v2(account, data_portal, order, duration=60, delta=delta)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)
@@ -248,20 +258,30 @@ class TestStrategy3(AbstractStrategy):
             net_value = account.net_value({self.code: current_price})
             dest_position = -int(net_value / current_price)
 
+        current_bid_ask = None
+        try:
+            current_bid_ask = data_portal.current_bid_ask([self.code])[self.code]
+        except:
+            logging.error("没有获取到最新的买卖价格, code:{}".format(self.code))
+
         if len(account.positions) > 0:
             current_position = account.positions[self.code]
         change = dest_position - current_position
 
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 当前价格:{}, strategy:{}" \
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 当前价格:{}, 最新买卖价:{}, strategy:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position,
-                        current_price, TestStrategy3.__doc__)
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                        current_price, current_bid_ask.__dict__ if current_bid_ask else None, TestStrategy3.__doc__)
+            if current_bid_ask:
+                delta = 0.01
+                limit_price = (current_bid_ask.bid_price + delta) if direction == OrderDirection.BUY else (
+                        current_bid_ask.ask_price - delta)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=40, retry_count=1)
+                # self.ensure_order_filled(account, data_portal, order, period=40, retry_count=1)
+                self.ensure_order_filled_v2(account, data_portal, order, duration=40, delta=delta)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)
