@@ -482,6 +482,10 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
                 now = Timestamp.now(tz='Asia/Shanghai')
                 threshold = now + Timedelta(seconds=duration)
                 while now <= threshold:
+                    if (order.status == OrderStatus.CANCELED) or (order.status == OrderStatus.FILLED) or order.status == OrderStatus.FAILED:
+                        logging.info("没有为成交的订单，不需要ensure")
+                        break
+                    bid_ask = None
                     try:
                         bid_ask: BidAsk = data_portal.current_bid_ask([order.code])[order.code]
                     except:
@@ -498,14 +502,13 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
                             if abs(target_price - order.limit_price) > delta:
                                 order.limit_price = target_price
                                 account.update_order(order)
-
                     time.sleep(1)
                     now = Timestamp.now(tz='Asia/Shanghai')
-
-                logging.info("订单在规定时间内没有成交，将会使用市价单挂单")
-                account.cancel_open_order(order)
-                new_order = MKTOrder(order.code, order.direction, order.quantity, now)
-                account.place_order(new_order)
+                if order.status == OrderStatus.CREATED or order.status == OrderStatus.SUBMITTED or order.status == OrderStatus.PARTIAL_FILLED:
+                    logging.info("订单在规定时间内没有成交，将会使用市价单挂单")
+                    account.cancel_open_order(order)
+                    new_order = MKTOrder(order.code, order.direction, order.quantity, now)
+                    account.place_order(new_order)
             except:
                 import traceback
                 err_msg = "ensure order filled失败:{}".format(traceback.format_exc())
