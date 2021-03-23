@@ -287,6 +287,9 @@ class TimeSeriesFunction(metaclass=ABCMeta):
 
         return values
 
+    def current_bid_ask(self, codes):
+        raise NotImplementedError
+
 
 class TimeSeries(object):
 

@@ -8,3 +8,4 @@ jupyter
 cassandra-driver
 PyYAML
 scipy
+statsmodels

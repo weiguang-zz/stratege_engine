@@ -459,6 +459,10 @@ class AbstractAccount(metaclass=ABCMeta):
     def cancel_open_order(self, open_order):
         pass
 
+    @abstractmethod
+    def update_order(self, order):
+        pass
+
 
 class AccountRepo(metaclass=ABCMeta):
     @abstractmethod
@@ -473,6 +477,9 @@ class AccountRepo(metaclass=ABCMeta):
 class BacktestAccount(AbstractAccount):
 
     def cancel_open_order(self, open_order):
+        raise NotImplementedError
+
+    def update_order(self, order):
         raise NotImplementedError
 
     def match(self, data):

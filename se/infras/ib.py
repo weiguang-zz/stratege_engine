@@ -30,6 +30,7 @@ from trading_calendars import TradingCalendar
 from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MKTOrder, OrderDirection, LimitOrder, \
     DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution, Operation, OrderStatus
 from se.domain2.domain import send_email
+from se.domain2.engine.engine import BidAsk
 from se.domain2.monitor import alarm, AlarmLevel, EscapeParam, do_log, retry
 from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Asset, HistoryDataQueryCommand, \
     TSData, Price, Tick
@@ -116,7 +117,8 @@ class IBClient(EWrapper):
     def orderStatus(self, orderId: OrderId, status: str, filled: float, remaining: float, avgFillPrice: float,
                     permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
         try:
-            super().orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice, clientId,
+            super().orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId, lastFillPrice,
+                                clientId,
                                 whyHeld, mktCapPrice)
             if self.account_subscriber:
                 self.account_subscriber.orderStatus(orderId, status, filled, remaining, avgFillPrice, permId, parentId,
@@ -443,11 +445,12 @@ class IBAccount(AbstractAccount, EWrapper):
     @alarm(target='下单', escape_params=[EscapeParam(index=0, key='self')])
     @retry(limit=3)
     def place_order(self, order: Order):
+        if order.ib_order_id:
+            raise RuntimeError("非法的订单，订单已经被提交，请使用更新接口")
         self.orders.append(order)
         ib_order_id = self.cli.next_valid_id()
-        order.ib_order_id = ib_order_id
-        self.ib_order_id_to_order[ib_order_id] = order
         ib_order = self.change_to_ib_order(order)
+        self.ib_order_id_to_order[ib_order_id] = order
         self.cli.placeOrder(ib_order_id, self.cli.code_to_contract(order.code), ib_order)
         time.sleep(2)
         if order.status == OrderStatus.FAILED or order.status == OrderStatus.CREATED \
@@ -455,6 +458,22 @@ class IBAccount(AbstractAccount, EWrapper):
             if order.status == OrderStatus.CREATED:
                 self.cancel_open_order(order)
             raise RuntimeError("place order error")
+        order.ib_order_id = ib_order_id
+
+    @do_log(target_name='更新订单', escape_params=[EscapeParam(index=0, key='self')])
+    @alarm(target='更新订单', escape_params=[EscapeParam(index=0, key='self')])
+    @retry(limit=3)
+    def update_order(self, order: Order):
+        if not order.ib_order_id:
+            raise RuntimeError("非法的订单，该订单还未提交")
+        ib_order = self.change_to_ib_order(order)
+        self.cli.placeOrder(order.ib_order_id, self.cli.code_to_contract(order.code), ib_order)
+        time.sleep(2)
+        if order.status == OrderStatus.FAILED or order.status == OrderStatus.CREATED \
+                or order.status == OrderStatus.CANCELED:
+            if order.status == OrderStatus.CREATED:
+                self.cancel_open_order(order)
+            raise RuntimeError("update order error")
 
     def match(self, data):
         raise NotImplementedError
@@ -818,6 +837,22 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
             'value': price,
             'attrib': attrib
         }
+        if tickType == 1:
+            # bid price
+            if code in self.latest_bid_ask:
+                self.latest_bid_ask[code].with_bid_price(price)
+            else:
+                bid_ask = BidAsk()
+                bid_ask.with_bid_price(price)
+                self.latest_bid_ask[code] = bid_ask
+        elif tickType == 2:
+            # ask price
+            if code in self.latest_bid_ask:
+                self.latest_bid_ask[code].with_ask_price(price)
+            else:
+                bid_ask = BidAsk()
+                bid_ask.with_ask_price(price)
+                self.latest_bid_ask[code] = bid_ask
         md = MarketData(self.name(), Timestamp.now(tz='Asia/Shanghai'), code=code, values=values)
         for sub in self.sub_map[code]:
             sub.on_data(md)
@@ -828,6 +863,22 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
             'tick_type': tickType,
             'value': size,
         }
+        if tickType == 0:
+            # bid size
+            if code in self.latest_bid_ask:
+                self.latest_bid_ask[code].with_bid_size(size)
+            else:
+                bid_ask = BidAsk()
+                bid_ask.with_bid_size(size)
+                self.latest_bid_ask[code] = bid_ask
+        elif tickType == 3:
+            # ask price
+            if code in self.latest_bid_ask:
+                self.latest_bid_ask[code].with_ask_size(size)
+            else:
+                bid_ask = BidAsk()
+                bid_ask.with_ask_size(size)
+                self.latest_bid_ask[code] = bid_ask
         md = MarketData(self.name(), Timestamp.now(tz='Asia/Shanghai'), code=code, values=values)
         for sub in self.sub_map[code]:
             sub.on_data(md)
@@ -862,6 +913,13 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
                 ret[code] = self.latest_price[code]
         return ret
 
+    def current_bid_ask(self, codes) -> Mapping[str, BidAsk]:
+        ret = {}
+        for code in codes:
+            if code in self.latest_bid_ask:
+                ret[code] = self.latest_bid_ask[code]
+        return ret
+
     def load_assets(self) -> List[Asset]:
         raise NotImplementedError
 
@@ -890,6 +948,7 @@ class IBMarketData(TimeSeriesFunction, EWrapper):
         self.client = cli
         self.code_to_req: Mapping[str, Request] = {}
         self.latest_price: Mapping[str, Price] = {}
+        self.latest_bid_ask: Mapping[str, BidAsk] = {}
 
     def columns(self) -> List[Column]:
         return []

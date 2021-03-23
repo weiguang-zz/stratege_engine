@@ -65,12 +65,18 @@ class ACBStrategy(AbstractStrategy):
         current_position = 0
         net_value = None
 
-        # 等待直到获取到最新的股票价格
+        # 获取最新的股票价格
         current_price = None
         try:
             current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
         except:
             logging.error("没有获取到当天的开盘价,code:{}".format(self.code))
+
+        current_bid_ask = None
+        try:
+            current_bid_ask = data_portal.current_bid_ask([self.code])[self.code]
+        except:
+            logging.error("没有获取到最新的买卖价, code:{}".format(self.code))
 
         if current_price:
             net_value = account.net_value({self.code: current_price})
@@ -84,14 +90,21 @@ class ACBStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, strategy:{}" \
-                .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
-                        current_price, ACBStrategy.__doc__)
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, " \
+                     "今日开盘价：{}, 当前买卖价:{}, strategy:{}".format(event.visible_time, current_position, net_value,
+                                                              dest_position, self.last_open, self.last_close,
+                                                              current_price,
+                                                              current_bid_ask.__dict__ if current_bid_ask else None,
+                                                              ACBStrategy.__doc__)
+            if current_bid_ask:
+                delta = 0.01
+                limit_price = (current_bid_ask.bid_price + delta) if direction == OrderDirection.BUY else (
+                        current_bid_ask.ask_price - delta)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=60, retry_count=1)
+                self.ensure_order_filled_v2(account, data_portal, order, duration=60, delta=delta)
+                # self.ensure_order_filled(account, data_portal, order, period=60, retry_count=1)
             else:
                 logging.warning("没有获取到当前价格，将会以市价单下单")
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
@@ -109,6 +122,12 @@ class ACBStrategy(AbstractStrategy):
         dest_position = 0
         current_position = 0
         net_value = None
+
+        current_bid_ask = None
+        try:
+            current_bid_ask = data_portal.current_bid_ask([self.code])[self.code]
+        except:
+            logging.error("没有获取到最新的买卖价，code:{}".format(self.code))
 
         # 等待直到获取到最新的股票价格
         current_price = None
@@ -129,16 +148,22 @@ class ACBStrategy(AbstractStrategy):
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
 
-            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(current_position,
-                                                                                        net_value, dest_position,
-                                                                                        self.last_close,
-                                                                                        current_price,
-                                                                                        ACBStrategy.__doc__)
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, " \
+                     "今日收盘价:{}, 当前买卖价:{}, strategy:{}".format(current_position,
+                                                              net_value, dest_position,
+                                                              self.last_close,
+                                                              current_price,
+                                                              current_bid_ask.__dict__ if current_bid_ask else None,
+                                                              ACBStrategy.__doc__)
+            if current_bid_ask:
+                delta = 0.01
+                limit_price = (current_bid_ask.bid_price + delta) if direction == OrderDirection.BUY else (
+                        current_bid_ask.ask_price - delta)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, period=40, retry_count=1)
+                # self.ensure_order_filled(account, data_portal, order, period=40, retry_count=1)
+                self.ensure_order_filled_v2(account, data_portal, order, duration=40, delta=delta)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)

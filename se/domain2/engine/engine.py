@@ -14,7 +14,7 @@ from pandas._libs.tslibs.timestamps import Timestamp
 from trading_calendars import TradingCalendar
 
 from se.domain2.account.account import AbstractAccount, BacktestAccount, Bar, Tick, OrderCallback, AccountRepo, \
-    LimitOrder, OrderStatus, MKTOrder
+    LimitOrder, OrderStatus, MKTOrder, OrderDirection
 from se.domain2.domain import BeanContainer
 from se.domain2.monitor import alarm, AlarmLevel, EscapeParam, do_alarm, retry, do_log
 from se.domain2.time_series.time_series import TimeSeriesRepo, HistoryDataQueryCommand, TimeSeriesSubscriber, TSData, \
@@ -349,7 +349,7 @@ class DataPortal(TimeSeriesSubscriber):
                 next_close = us_calendar.next_close(now)
                 previous_open = us_calendar.previous_open(next_close)
                 pre_open_start = previous_open - pre_open_last
-                if pre_open_start+pre_open_allowed_delay < now < previous_open:
+                if pre_open_start + pre_open_allowed_delay < now < previous_open:
                     try:
                         self.current_price([code], now, pre_open_allowed_delay)
                     except:
@@ -413,7 +413,50 @@ class DataPortal(TimeSeriesSubscriber):
         else:
             raise RuntimeError("wrong event data")
 
+    @alarm(level=AlarmLevel.ERROR, target="获取最新的买卖价")
+    @retry(limit=10, interval=1)
+    def current_bid_ask(self, codes: List[str], delay_allowed: Timedelta = Timedelta(seconds=10)) -> \
+            Mapping[str, BidAsk]:
+        if self.is_backtest:
+            raise RuntimeError("回测中不支持")
+        now = Timestamp.now(tz='Asia/Shanghai')
+        ret = self.realtime_ts.func.current_bid_ask(codes)
+        # 检查数据是否缺失或者有延迟
+        for code in codes:
+            if code not in ret:
+                raise RuntimeError("没有获取到{}的最新买卖价，当前时间:{}".format(code, now))
+            bid_ask: BidAsk = ret[code]
+            if not (bid_ask.bid_size and bid_ask.bid_price and bid_ask.ask_price and bid_ask.ask_size):
+                raise RuntimeError("买卖报价缺少数据")
+            if delay_allowed:
+                if now - bid_ask.update_time > delay_allowed:
+                    raise RuntimeError("没有获取到{}的最新买卖价，当前时间:{}, 最新买卖价:{}, 允许的延迟:{}".
+                                       format(code, now, bid_ask.__dict__, delay_allowed))
+        return ret
 
+class BidAsk(object):
+    def __init__(self):
+        self.update_time = None
+        self.bid_size = None
+        self.bid_price = None
+        self.ask_size = None
+        self.ask_price = None
+
+    def with_ask_price(self, ask_price):
+        self.ask_price = ask_price
+        self.update_time = Timestamp.now(tz='Asia/Shanghai')
+
+    def with_ask_size(self, ask_size):
+        self.ask_size = ask_size
+        self.update_time = Timestamp.now(tz='Asia/Shanghai')
+
+    def with_bid_price(self, bid_price):
+        self.bid_price = bid_price
+        self.update_time = Timestamp.now(tz='Asia/Shanghai')
+
+    def with_bid_size(self, bid_size):
+        self.bid_size = bid_size
+        self.update_time = Timestamp.now(tz='Asia/Shanghai')
 
 
 class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
@@ -422,6 +465,58 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
     @do_log(target_name="订单状态变更", escape_params=[EscapeParam(index=0, key='self'), EscapeParam(index=2, key='account')])
     def order_status_change(self, order, account):
         self.do_order_status_change(order, account)
+
+    def ensure_order_filled_v2(self, account: AbstractAccount, data_portal: DataPortal, order: LimitOrder,
+                               duration: int, delta=0.01):
+        """
+        在duration所指定的时间范围内，跟踪市场上的买一和卖一的价格。 超过duration之后，则挂市价单
+        :param delta:
+        :param account:
+        :param data_portal:
+        :param order:
+        :param duration:
+        :return:
+        """
+        def do_ensure():
+            try:
+                now = Timestamp.now(tz='Asia/Shanghai')
+                threshold = now + Timedelta(seconds=duration)
+                while now <= threshold:
+                    try:
+                        bid_ask: BidAsk = data_portal.current_bid_ask([order.code])[order.code]
+                    except:
+                        pass
+                    if bid_ask:
+                        if order.direction == OrderDirection.BUY:
+                            target_price = bid_ask.bid_price + delta
+                            if abs(target_price - order.limit_price) > delta:
+                                order.limit_price = target_price
+                                account.update_order(order)
+
+                        else:
+                            target_price = bid_ask.ask_price - delta
+                            if abs(target_price - order.limit_price) > delta:
+                                order.limit_price = target_price
+                                account.update_order(order)
+
+                    time.sleep(1)
+                    now = Timestamp.now(tz='Asia/Shanghai')
+
+                logging.info("订单在规定时间内没有成交，将会使用市价单挂单")
+                account.cancel_open_order(order)
+                new_order = MKTOrder(order.code, order.direction, order.quantity, now)
+                account.place_order(new_order)
+            except:
+                import traceback
+                err_msg = "ensure order filled失败:{}".format(traceback.format_exc())
+                logging.error(err_msg)
+                # 显示告警，因为在线程的Runable方法中，不能再抛出异常。
+                do_alarm('ensure order filled', AlarmLevel.ERROR, None, None, '{}'.format(traceback.format_exc()))
+
+        if not isinstance(order, LimitOrder):
+            raise RuntimeError("wrong order type")
+
+        threading.Thread(name='ensure_order_filled', target=do_ensure).start()
 
     def ensure_order_filled(self, account: AbstractAccount, data_portal: DataPortal, order: LimitOrder, period: int,
                             retry_count: int):
