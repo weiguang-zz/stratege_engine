@@ -380,7 +380,10 @@ class IBAccount(AbstractAccount, EWrapper):
         if not open_order.ib_order_id:
             raise RuntimeError("ib_order_id is None")
         self.cli.cli.cancelOrder(orderId=open_order.ib_order_id)
-        time.sleep(2)
+        for i in range(4):
+            time.sleep(0.5)
+            if open_order.status == OrderStatus.CANCELED:
+                break
         if open_order.status != OrderStatus.CANCELED:
             raise RuntimeError("取消订单失败")
 
@@ -452,9 +455,14 @@ class IBAccount(AbstractAccount, EWrapper):
         ib_order = self.change_to_ib_order(order)
         self.ib_order_id_to_order[ib_order_id] = order
         self.cli.placeOrder(ib_order_id, self.cli.code_to_contract(order.code), ib_order)
-        time.sleep(2)
-        if order.status == OrderStatus.FAILED or order.status == OrderStatus.CREATED \
-                or order.status == OrderStatus.CANCELED:
+        # 由于IB的下单操作也是异步的，订单的状态是异步推送过来的，无法确定这个延迟时间是多少
+        # 大部分情况下，应该认为这个订单状态的推送是很小延迟的。但是不排除有些情况下这个延迟会比较长，所以使用分段sleep的方法进行检测
+        # 如果2秒还未收到订单状态的变更的话，则认为是这个订单失败了，会重试
+        for i in range(4):
+            time.sleep(0.5)
+            if order.status != OrderStatus.CREATED:
+                break
+        if order.status == OrderStatus.CREATED or order.status == OrderStatus.FAILED:
             if order.status == OrderStatus.CREATED:
                 self.cancel_open_order(order)
             raise RuntimeError("place order error")
@@ -466,13 +474,13 @@ class IBAccount(AbstractAccount, EWrapper):
     def update_order(self, order: Order):
         if not order.ib_order_id:
             raise RuntimeError("非法的订单，该订单还未提交")
+        if not (order.status == OrderStatus.SUBMITTED or order.status == OrderStatus.PARTIAL_FILLED):
+            raise RuntimeError("非法的订单状态")
         ib_order = self.change_to_ib_order(order)
         self.cli.placeOrder(order.ib_order_id, self.cli.code_to_contract(order.code), ib_order)
-        time.sleep(2)
-        if order.status == OrderStatus.FAILED or order.status == OrderStatus.CREATED \
-                or order.status == OrderStatus.CANCELED:
-            if order.status == OrderStatus.CREATED:
-                self.cancel_open_order(order)
+        # 等待1s，如果订单没有变为失败状态，则认为更新成功
+        time.sleep(1)
+        if order.status == OrderStatus.FAILED:
             raise RuntimeError("update order error")
 
     def match(self, data):
