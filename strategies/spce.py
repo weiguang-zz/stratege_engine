@@ -59,7 +59,6 @@ class SPCEStrategy(AbstractStrategy):
         net_value = None
 
         # 等待直到获取到最新的股票价格
-        # 等待直到获取到最新的股票价格
         current_price = None
         try:
             current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
@@ -67,6 +66,12 @@ class SPCEStrategy(AbstractStrategy):
             logging.error("没有获取到当天的开盘价,code:{}".format(self.code))
         if current_price:
             net_value = account.net_value({self.code: current_price})
+
+        current_bid_ask = None
+        try:
+            current_bid_ask = data_portal.current_bid_ask([self.code])[self.code]
+        except:
+            logging.error("没有获取到最新的买卖价,code:{}".format(self.code))
 
         if len(account.positions) > 0:
             current_position = account.positions[self.code]
@@ -77,14 +82,18 @@ class SPCEStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, strategy:{}" \
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, 最新买卖价:{}, strategy:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
-                        current_price, SPCEStrategy.__doc__)
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                        current_price, current_bid_ask.__dict__ if current_bid_ask else None, SPCEStrategy.__doc__)
+            if current_bid_ask:
+                delta = 0.01
+                limit_price = (current_bid_ask.bid_price + delta) if direction == OrderDirection.BUY else (
+                        current_bid_ask.ask_price - delta)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, 30, 3)
+                # self.ensure_order_filled(account, data_portal, order, 30, 3)
+                self.ensure_order_filled_v2(account, data_portal, order, duration=60, delta=delta)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)
@@ -116,6 +125,12 @@ class SPCEStrategy(AbstractStrategy):
         if current_price:
             net_value = account.net_value({self.code: current_price})
 
+        current_bid_ask = None
+        try:
+            current_bid_ask = data_portal.current_bid_ask([self.code])[self.code]
+        except:
+            logging.error("没有获取到最新的买卖价,code:{}".format(self.code))
+
         if current_price and self.last_close and current_price > self.last_close:
             dest_position = int(net_value / current_price)
 
@@ -125,16 +140,23 @@ class SPCEStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(event.visible_time,
-                                                                                  current_position,
-                                                                                  net_value, dest_position,
-                                                                                  self.last_close,
-                                                                                  current_price, SPCEStrategy.__doc__)
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, " \
+                     "买卖价:{}, strategy:{}".format(event.visible_time,
+                                                  current_position,
+                                                  net_value, dest_position,
+                                                  self.last_close,
+                                                  current_price,
+                                                  current_bid_ask.__dict__ if current_bid_ask else None,
+                                                  SPCEStrategy.__doc__)
+            if current_bid_ask:
+                delta = 0.01
+                limit_price = (current_bid_ask.bid_price + delta) if direction == OrderDirection.BUY else (
+                        current_bid_ask.ask_price - delta)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price)
                 order.with_reason(reason)
                 account.place_order(order)
-                self.ensure_order_filled(account, data_portal, order, 40, 1)
+                # self.ensure_order_filled(account, data_portal, order, 40, 1)
+                self.ensure_order_filled_v2(account, data_portal, order, 40, delta)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)

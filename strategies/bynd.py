@@ -74,6 +74,12 @@ class BYNDStrategy(AbstractStrategy):
         if current_price:
             net_value = account.net_value({self.code: current_price})
 
+        current_bid_ask = None
+        try:
+            current_bid_ask = data_portal.current_bid_ask([self.code])[self.code]
+        except:
+            logging.error("没有获取到最新的买卖价,code:{}".format(self.code))
+
         if len(account.positions) > 0:
             current_position = account.positions[self.code]
 
@@ -83,15 +89,19 @@ class BYNDStrategy(AbstractStrategy):
         change = dest_position - current_position
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
-            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, strategy:{}" \
+            reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日开盘价:{}, 昨日收盘价:{}, 今日开盘价：{}, 当前买卖价:{}, strategy:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_open, self.last_close,
-                        current_price, BYNDStrategy.__doc__)
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+                        current_price, current_bid_ask.__dict__ if current_bid_ask else None, BYNDStrategy.__doc__)
+            if current_bid_ask:
+                delta = 0.01
+                limit_price = (current_bid_ask.bid_price + delta) if direction == OrderDirection.BUY else (
+                        current_bid_ask.ask_price - delta)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price)
                 order.with_reason(reason)
                 account.place_order(order)
                 if not self.is_backtest:
-                    self.ensure_order_filled(account, data_portal, order, period=60, retry_count=1)
+                    # self.ensure_order_filled(account, data_portal, order, period=60, retry_count=1)
+                    self.ensure_order_filled_v2(account, data_portal, order, 60, delta)
             else:
                 logging.warning("没有获取到当前价格，将会以市价单下单")
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
@@ -119,6 +129,12 @@ class BYNDStrategy(AbstractStrategy):
         if current_price:
             net_value = account.net_value({self.code: current_price})
 
+        current_bid_ask = None
+        try:
+            current_bid_ask = data_portal.current_bid_ask([self.code])[self.code]
+        except:
+            logging.error("没有获取到最新的买卖价,code:{}".format(self.code))
+
         if current_price and self.last_open and current_price > self.last_open:
             dest_position = int(net_value / current_price)
 
@@ -129,17 +145,23 @@ class BYNDStrategy(AbstractStrategy):
         if change != 0:
             direction = OrderDirection.BUY if change > 0 else OrderDirection.SELL
 
-            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, strategy:{}".format(current_position,
-                                                                                        net_value, dest_position,
-                                                                                        self.last_close,
-                                                                                        current_price,
-                                                                                        BYNDStrategy.__doc__)
-            if current_price:
-                order = LimitOrder(self.code, direction, abs(change), event.visible_time, current_price)
+            reason = "当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日收盘价:{}, 当前买卖价:{}, " \
+                     "strategy:{}".format(current_position,
+                                          net_value, dest_position,
+                                          self.last_close,
+                                          current_price,
+                                          current_bid_ask.__dict__ if current_bid_ask else None,
+                                          BYNDStrategy.__doc__)
+            if current_bid_ask:
+                delta = 0.01
+                limit_price = (current_bid_ask.bid_price + delta) if direction == OrderDirection.BUY else (
+                        current_bid_ask.ask_price - delta)
+                order = LimitOrder(self.code, direction, abs(change), event.visible_time, limit_price)
                 order.with_reason(reason)
                 account.place_order(order)
                 if not self.is_backtest:
-                    self.ensure_order_filled(account, data_portal, order, period=40, retry_count=1)
+                    # self.ensure_order_filled(account, data_portal, order, period=40, retry_count=1)
+                    self.ensure_order_filled_v2(account, data_portal, order, 40, delta)
             else:
                 order = MKTOrder(self.code, direction, abs(change), event.visible_time)
                 order.with_reason(reason)
