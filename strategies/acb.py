@@ -17,6 +17,12 @@ class ACBStrategy(AbstractStrategy):
         胜率:0.6722222222222223
         年化夏普:5.256477163933315
         平均盈利:0.05729046297931058, 平均亏损:-0.038921799742595936
+
+    做多两倍杠杆下的回测结果：
+        最大回撤:-0.23874748346275543
+        胜率:0.712707182320442
+        年化夏普:5.441637490135704
+        平均盈利:0.07866330194179004, 平均亏损:-0.053507280037103214
     """
 
     def do_order_status_change(self, order, account):
@@ -54,6 +60,7 @@ class ACBStrategy(AbstractStrategy):
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
+        self.long_leverage = 2
 
     def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
@@ -139,7 +146,7 @@ class ACBStrategy(AbstractStrategy):
             net_value = account.net_value({self.code: current_price})
 
         if current_price and self.last_open and current_price > self.last_open:
-            dest_position = int(net_value / current_price)
+            dest_position = int(net_value * self.long_leverage / current_price)
 
         if len(account.positions) > 0:
             current_position = account.positions[self.code]

@@ -15,6 +15,11 @@ class BYNDStrategy(AbstractStrategy):
         胜率:0.6941747572815534
         年化夏普:3.6594249937316414
         平均盈利:0.025437886378458587, 平均亏损:-0.023429066055364794
+    两倍杠杆下的回测结果：
+        最大回撤:-0.47002508148981215
+        胜率:0.6941747572815534
+        年化夏普:3.6594249937316414
+        平均盈利:0.050875772756917174, 平均亏损:-0.04685813211072959
     """
 
     def do_order_status_change(self, order, account):
@@ -53,6 +58,7 @@ class BYNDStrategy(AbstractStrategy):
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
         self.is_backtest = engine.is_backtest
+        self.long_leverage = 2
 
     def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
@@ -136,7 +142,7 @@ class BYNDStrategy(AbstractStrategy):
             logging.error("没有获取到最新的买卖价,code:{}".format(self.code))
 
         if current_price and self.last_open and current_price > self.last_open:
-            dest_position = int(net_value / current_price)
+            dest_position = int(net_value * self.long_leverage / current_price)
 
         if len(account.positions) > 0:
             current_position = account.positions[self.code]
