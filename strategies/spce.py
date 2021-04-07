@@ -57,6 +57,7 @@ class SPCEStrategy(AbstractStrategy):
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
+        self.long_leverage = 2
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
@@ -137,7 +138,7 @@ class SPCEStrategy(AbstractStrategy):
             logging.error("没有获取到最新的买卖价,code:{}".format(self.code))
 
         if current_price and self.last_close and current_price > self.last_close:
-            dest_position = int(net_value / current_price)
+            dest_position = int(net_value * self.long_leverage / current_price)
 
         if len(account.positions) > 0:
             current_position = account.positions[self.code]
