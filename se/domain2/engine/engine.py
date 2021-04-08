@@ -493,16 +493,22 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
                     if bid_ask:
                         if order.direction == OrderDirection.BUY:
                             target_price = bid_ask.bid_price + delta
-                            if abs(target_price - order.limit_price) > delta:
+                            # 乘以1.1是为了防止跟自己的出价进行比较
+                            if abs(target_price - order.limit_price) > delta * 1.1:
                                 order.limit_price = target_price
+                                update_reason = "更新订单，当前时间:{}, 最新的买卖价:{}, 设定的delta:{}".\
+                                    format(now, bid_ask.__dict__, delta)
+                                order.reason = "{} \n {}".format(order.reason, update_reason)
                                 account.update_order(order)
-
                         else:
                             target_price = bid_ask.ask_price - delta
-                            if abs(target_price - order.limit_price) > delta:
+                            if abs(target_price - order.limit_price) > delta * 1.1:
                                 order.limit_price = target_price
+                                update_reason = "更新订单，当前时间:{}, 最新的买卖价:{}, 设定的delta:{}". \
+                                    format(now, bid_ask.__dict__, delta)
+                                order.reason = "{} \n {}".format(order.reason, update_reason)
                                 account.update_order(order)
-                    time.sleep(1)
+                    time.sleep(0.1)
                     now = Timestamp.now(tz='Asia/Shanghai')
                 if order.status == OrderStatus.CREATED or order.status == OrderStatus.SUBMITTED or order.status == OrderStatus.PARTIAL_FILLED:
                     logging.info("订单在规定时间内没有成交，将会使用市价单挂单")

@@ -478,10 +478,11 @@ class IBAccount(AbstractAccount, EWrapper):
             raise RuntimeError("非法的订单状态")
         ib_order = self.change_to_ib_order(order)
         self.cli.placeOrder(order.ib_order_id, self.cli.code_to_contract(order.code), ib_order)
-        # 等待1s，如果订单没有变为失败状态，则认为更新成功
-        time.sleep(1)
-        if order.status == OrderStatus.FAILED:
-            raise RuntimeError("update order error")
+        #  改为异步，因为更新订单通常只修改订单价格，所以几乎不会失败，改成异步的方式可以提高性能
+        # # 等待1s，如果订单没有变为失败状态，则认为更新成功
+        # time.sleep(1)
+        # if order.status == OrderStatus.FAILED:
+        #     raise RuntimeError("update order error")
 
     def match(self, data):
         raise NotImplementedError
