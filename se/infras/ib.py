@@ -471,13 +471,14 @@ class IBAccount(AbstractAccount, EWrapper):
     @do_log(target_name='更新订单', escape_params=[EscapeParam(index=0, key='self')])
     @alarm(target='更新订单', escape_params=[EscapeParam(index=0, key='self')])
     @retry(limit=3)
-    def update_order(self, order: Order):
+    def update_order(self, order: Order, reason: str):
         if not order.ib_order_id:
             raise RuntimeError("非法的订单，该订单还未提交")
         if not (order.status == OrderStatus.SUBMITTED or order.status == OrderStatus.PARTIAL_FILLED):
             raise RuntimeError("非法的订单状态")
         ib_order = self.change_to_ib_order(order)
         self.cli.placeOrder(order.ib_order_id, self.cli.code_to_contract(order.code), ib_order)
+        order.update_reasons.append(reason)
         #  改为异步，因为更新订单通常只修改订单价格，所以几乎不会失败，改成异步的方式可以提高性能
         # # 等待1s，如果订单没有变为失败状态，则认为更新成功
         # time.sleep(1)

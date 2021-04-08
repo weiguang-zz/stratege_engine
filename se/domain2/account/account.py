@@ -72,6 +72,7 @@ class Order(metaclass=ABCMeta):
         self.quantity_split = quantity_split
         self.ib_order_id = None
         self.reason = None
+        self.update_reasons = []
 
     def with_reason(self, reason: str):
         self.reason = reason
@@ -460,7 +461,7 @@ class AbstractAccount(metaclass=ABCMeta):
         pass
 
     @abstractmethod
-    def update_order(self, order):
+    def update_order(self, order, reason):
         pass
 
 
@@ -479,7 +480,7 @@ class BacktestAccount(AbstractAccount):
     def cancel_open_order(self, open_order):
         raise NotImplementedError
 
-    def update_order(self, order):
+    def update_order(self, order, reason):
         raise NotImplementedError
 
     def match(self, data):
