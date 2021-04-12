@@ -60,7 +60,7 @@ class ACBStrategy(AbstractStrategy):
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
-        self.long_leverage = 2
+        self.long_leverage = 1
 
     def set_close_price(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         current_price = data_portal.current_price([self.code], event.visible_time)[self.code].price
