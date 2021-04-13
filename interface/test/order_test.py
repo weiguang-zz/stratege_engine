@@ -36,13 +36,16 @@ acc.with_client(config.get('ib_account', 'host'), config.getint('ib_account', 'p
                 config.getint('ib_account', 'client_id'))
 
 acc.with_order_callback(TestStrategy(None))
-code = '700_STK_HKD_SEHK'
+# code = '700_STK_HKD_SEHK'
+code = 'AAPL_STK_USD_SMART'
 contract = acc.cli.code_to_contract(code)
 ib_order: IBOrder = IBOrder()
 ib_order.orderType = "MKT"
 ib_order.totalQuantity = 100
 # ib_order.lmtPrice = 85
-ib_order.action = 'SELL'
+ib_order.action = 'BUY'
+ib_order.whatIf = True
+
 # ib_order.outsideRth = True
 # ib_order.tif = "GTD"
 # ib_order.goodAfterTime = '18:45:00'
@@ -56,9 +59,11 @@ ib_order.action = 'SELL'
 # ib_order.algoStrategy = 'Adaptive'
 # ib_order.algoParams = [TagValue("adaptivePriority", 'Normal')]
 
-order: Order = LimitOrder(code, OrderDirection.BUY, quantity=1000, place_time=Timestamp.now(), limit_price=644)
+# order: Order = LimitOrder(code, OrderDirection.BUY, quantity=1000, place_time=Timestamp.now(), limit_price=644)
 
 # acc.cli.cli.cancelOrder(34)
 # acc.cli.placeOrder(acc.cli.next_valid_id(), contract, ib_order)
-acc.place_order(order)
+# acc.place_order(order)
+leverage = acc.get_max_leverage('GSX_STK_USD_ISLAND', OrderDirection.BUY, 25.37)
+print("leverage:{}".format(leverage))
 print("done")

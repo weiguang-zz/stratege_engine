@@ -146,7 +146,9 @@ class ACBStrategy(AbstractStrategy):
             net_value = account.net_value({self.code: current_price})
 
         if current_price and self.last_open and current_price > self.last_open:
-            dest_position = int(net_value * self.long_leverage / current_price)
+            max_leverage = account.get_max_leverage(self.code, net_value, OrderDirection.BUY)
+            leverage = min(max_leverage, self.long_leverage)
+            dest_position = int(net_value * leverage / current_price)
 
         if len(account.positions) > 0:
             current_position = account.positions[self.code]

@@ -18,6 +18,7 @@ from ibapi.contract import Contract, ContractDetails
 from ibapi.execution import Execution, ExecutionFilter
 from ibapi.order import Order as IBOrder
 from ibapi.order_condition import OrderCondition, PriceCondition
+from ibapi.order_state import OrderState
 from ibapi.tag_value import TagValue
 from ibapi.ticktype import TickType, TickTypeEnum
 from ibapi.wrapper import EWrapper
@@ -39,9 +40,12 @@ from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Asset
 class Request(object):
     id_to_request = {}
 
-    def __init__(self):
+    def __init__(self, req_id: int = None):
         self.condition: Condition = Condition()
-        self.req_id = self._random_id()
+        if not req_id:
+            self.req_id = self._random_id()
+        else:
+            self.req_id = req_id
         self.resp = None
         Request.id_to_request[self.req_id] = self
 
@@ -52,8 +56,8 @@ class Request(object):
                 return k
 
     @classmethod
-    def new_request(cls):
-        return Request()
+    def new_request(cls, req_id: int = None):
+        return Request(req_id)
 
     @classmethod
     def clear(cls, req_id):
@@ -110,6 +114,15 @@ class IBClient(EWrapper):
             super().commissionReport(commissionReport)
             if self.account_subscriber:
                 self.account_subscriber.commissionReport(commissionReport)
+        except:
+            import traceback
+            logging.error("{}".format(traceback.format_exc()))
+
+    def openOrder(self, orderId: OrderId, contract: Contract, order: Order, orderState: OrderState):
+        try:
+            super().openOrder(orderId, contract, order, orderState)
+            if self.account_subscriber:
+                self.account_subscriber.openOrder(orderId, contract, order, orderState)
         except:
             import traceback
             logging.error("{}".format(traceback.format_exc()))
@@ -200,7 +213,7 @@ class IBClient(EWrapper):
         self.host = host
         self.port = port
         self.client_id = client_id
-        self.account_subscriber = None
+        self.account_subscriber: IBAccount = None
         self.tick_subscriber = None
         self.market_data_subscriber: EWrapper = None
         self._next_valid_id = None
@@ -423,6 +436,14 @@ class IBAccount(AbstractAccount, EWrapper):
         else:
             logging.info("重复的commission")
 
+    def openOrder(self, orderId: OrderId, contract: Contract, order: Order, orderState: OrderState):
+        if orderState and orderId in Request.id_to_request:
+            req = Request.id_to_request[orderId]
+            req.resp = orderState
+            if req.condition.acquire():
+                req.condition.notifyAll()
+                req.condition.release()
+
     def orderStatus(self, orderId: OrderId, status: str, filled: float, remaining: float, avgFillPrice: float,
                     permId: int, parentId: int, lastFillPrice: float, clientId: int, whyHeld: str, mktCapPrice: float):
         if orderId not in self.ib_order_id_to_order:
@@ -443,6 +464,56 @@ class IBAccount(AbstractAccount, EWrapper):
             order.status = OrderStatus.CANCELED
             if self.order_callback:
                 self.order_callback.order_status_change(order, self)
+
+    def get_max_leverage(self, code: str, direction: OrderDirection, price: float) -> float:
+        """
+        通过下单预览操作来查询某个资产的最大可用杠杆。
+        如果当前账户没有持有该资产的话，则保证金的变化(取初始保证金)跟订单的交易金额的比值即为该资产的杠杆倍数
+        如果当前账户持有该资产的话，则先尝试平仓，获取保证金的变化作为当前持仓所占用的保证金。 然后获取总的保证金变化，加上当前占用的保证金则为该资产
+        交易之后所占用的保证金，该值跟交易之后账户持有该资产的净值的比值即为杠杆倍数。
+
+        由于需要计算净值，需要知道订单的成交价，所以使用限价单
+        :param code:
+        :param amount:
+        :param order_direction:
+        :return:
+        """
+        after_net_value = 0
+        after_margin_occupy = 0
+        initial_margin_occupy = 0
+        current_position = 0
+        if code in self.positions:
+            # 先获取平仓的保证金变化
+            current_position = self.positions[code]
+            direction = OrderDirection.BUY if current_position < 0 else OrderDirection.SELL
+            order = LimitOrder(code, direction, abs(current_position), Timestamp.now(), price)
+            order_state = self.get_order_state(order)
+            initial_margin_occupy = float(order_state.initMarginChange)
+            if initial_margin_occupy <= 0:
+                initial_margin_occupy = 2000
+
+        dest_net_value = 1000000
+
+        dest_position = (abs(current_position) + 100) if direction == OrderDirection.BUY else -(
+                abs(current_position) + 100)
+        order = LimitOrder(code, direction, abs(dest_position - current_position), Timestamp.now(), price)
+        order_state = self.get_order_state(order)
+        after_margin_occupy = initial_margin_occupy + float(order_state.initMarginChange)
+        after_net_value = abs(price * dest_position)
+        return after_net_value / after_margin_occupy
+
+    def get_order_state(self, order: Order) -> OrderState:
+        ib_order_id = self.cli.next_valid_id()
+        req = Request.new_request(ib_order_id)
+        ib_order = self.change_to_ib_order(order)
+        ib_order.whatIf = True
+        self.cli.placeOrder(ib_order_id, self.cli.code_to_contract(order.code), ib_order)
+        if req.condition.acquire():
+            req.condition.wait(1)
+        Request.clear(req.req_id)
+        if not req.resp:
+            raise RuntimeError("没有获取到order state")
+        return req.resp
 
     @do_log(target_name='下单', escape_params=[EscapeParam(index=0, key='self')])
     @alarm(target='下单', escape_params=[EscapeParam(index=0, key='self')])

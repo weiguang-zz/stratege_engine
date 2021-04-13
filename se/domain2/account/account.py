@@ -464,6 +464,16 @@ class AbstractAccount(metaclass=ABCMeta):
     def update_order(self, order, reason):
         pass
 
+    @abstractmethod
+    def get_max_leverage(self, code: str, order_direction: OrderDirection, price: float) -> float:
+        """
+        获取某个资产的最大杠杆
+        :param order_direction:
+        :param code:
+        :return:
+        """
+        pass
+
 
 class AccountRepo(metaclass=ABCMeta):
     @abstractmethod
@@ -476,6 +486,9 @@ class AccountRepo(metaclass=ABCMeta):
 
 
 class BacktestAccount(AbstractAccount):
+
+    def get_max_leverage(self, code, order_direction: OrderDirection, price: float) -> float:
+        raise NotImplementedError
 
     def cancel_open_order(self, open_order):
         raise NotImplementedError
