@@ -511,7 +511,7 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
                 if order.status == OrderStatus.CREATED or order.status == OrderStatus.SUBMITTED or order.status == OrderStatus.PARTIAL_FILLED:
                     logging.info("订单在规定时间内没有成交，将会使用市价单挂单")
                     account.cancel_open_order(order)
-                    new_order = MKTOrder(order.code, order.direction, order.quantity, now)
+                    new_order = MKTOrder(order.code, order.direction, int(order.quantity - order.filled_quantity), now)
                     account.place_order(new_order)
             except:
                 import traceback
