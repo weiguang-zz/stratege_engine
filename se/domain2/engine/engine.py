@@ -513,6 +513,12 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
                     account.cancel_open_order(order)
                     new_order = MKTOrder(order.code, order.direction, int(order.quantity - order.filled_quantity), now)
                     account.place_order(new_order)
+                    # 一般情况下，市价单会立即成交，但是存在某个资产不可卖空的情况，这种情况下，市价单可能会被保留
+                    # 针对这种情况，需要取消掉，以免在不合适的时候成交
+                    time.sleep(10)
+                    if new_order.status == OrderStatus.SUBMITTED or new_order.status == OrderStatus.PARTIAL_FILLED:
+                        logging.info("市价单没有在规定的时间内成交，猜想可能是因为没有资产不可卖空导致的，将会取消订单")
+                        account.cancel_open_order(new_order)
             except:
                 import traceback
                 err_msg = "ensure order filled失败:{}".format(traceback.format_exc())
