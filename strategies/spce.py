@@ -140,8 +140,6 @@ class SPCEStrategy(AbstractStrategy):
         if current_price and self.last_close and current_price > self.last_close:
             dest_position = int(net_value * self.long_leverage / current_price)
 
-        dest_position = 0
-
         if len(account.positions) > 0:
             current_position = account.positions[self.code]
 
