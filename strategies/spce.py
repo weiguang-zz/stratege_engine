@@ -51,14 +51,14 @@ class SPCEStrategy(AbstractStrategy):
                              .format(self.last_open, self.last_close, df.iloc[-1]['start_time']))
             else:
                 raise RuntimeError("没有获取到昨日开盘价和收盘价")
-            self.last_open = 16.15
+            # self.last_open = 16.15
             # self.last_close = 33.77
 
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
         self.long_leverage = 2
-        self.short_leverage = 0.7
+        self.short_leverage = 1.5
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
