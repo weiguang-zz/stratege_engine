@@ -69,8 +69,10 @@ class Order(metaclass=ABCMeta):
         self.filled_avg_price = 0
         self.fee = 0
         self.execution_map = {}
+        # 没有用的字段
         self.quantity_split = quantity_split
         self.ib_order_id = None
+        self.td_order_id = None
         self.reason = None
         self.update_reasons = []
 
@@ -123,6 +125,7 @@ class Order(metaclass=ABCMeta):
         #     self.filled_end_time = execution.filled_end_time
         #     self.status = OrderStatus.FILLED
         self.fee += execution.commission
+        self.execution_map[execution.id] = execution
 
     def reverse(self, execution: OrderExecution):
         self.filled_avg_price = (self.quantity * self.filled_avg_price -
@@ -136,6 +139,7 @@ class Order(metaclass=ABCMeta):
         # if self.filled_quantity < self.quantity:
         #     self.status = OrderStatus.CREATED
         self.fee = self.fee - execution.commission
+        self.execution_map.pop(execution.id)
 
     # def order_filled(self, filled_quantity, filled_price, filled_start_time, filled_end_time):
     #     if self.status == OrderStatus.FILLED or self.status == OrderStatus.CANCELED:

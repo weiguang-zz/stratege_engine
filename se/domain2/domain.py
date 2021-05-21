@@ -61,8 +61,13 @@ def do_send_email(title: str, content: str, config: ConfigParser):
     k = random.randint(0, len(passwords)-1)
     password = passwords[k]
     smtp.login(config.get('email', 'username'), password)
-
-    title = '[{}]{}'.format(config.get("ib_account", "name"), title)
+    if 'ib_account' in config.sections():
+        name = config.get("ib_account", "name")
+    elif 'td_account' in config.sections():
+        name = config.get("td_account", "name")
+    else:
+        raise RuntimeError("config error")
+    title = '[{}]{}'.format(name, title)
     sender_email = config.get('email', 'sender_email')
     receiver = config.get('email', 'receiver')
     # 替换掉content中的< >字符

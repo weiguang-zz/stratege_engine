@@ -7,6 +7,7 @@ from enum import Enum
 from threading import Thread
 from typing import *
 
+import pandas as pd
 import trading_calendars
 from pandas import DatetimeIndex, Series
 from pandas._libs.tslibs.timedeltas import Timedelta
@@ -505,10 +506,17 @@ class AbstractStrategy(OrderCallback, metaclass=ABCMeta):
                                 order.limit_price = target_price
                                 update_reason = "当前时间:{}, 订单的限价:{}, 最新的买卖价:{}, 设定的delta:{}". \
                                     format(now, order.limit_price, bid_ask.__dict__, delta)
-                                account.update_order(order, update_reason)
+                                new_order = account.update_order(order, update_reason)
+                                if new_order:
+                                    # 针对td的情况，修改订单意味着取消原来的订单，并且创建一个新的订单
+                                    # 这个时候需要启动监听线程
+                                    new_duration = (threshold - now).seconds
+                                    self.ensure_order_filled_v2(account, data_portal, new_order, new_duration, delta)
+                                    pass
                     time.sleep(0.1)
                     now = Timestamp.now(tz='Asia/Shanghai')
-                if order.status == OrderStatus.CREATED or order.status == OrderStatus.SUBMITTED or order.status == OrderStatus.PARTIAL_FILLED:
+                if order.status == OrderStatus.CREATED or order.status == OrderStatus.SUBMITTED or \
+                        order.status == OrderStatus.PARTIAL_FILLED:
                     logging.info("订单在规定时间内没有成交，将会使用市价单挂单")
                     account.cancel_open_order(order)
                     new_order = MKTOrder(order.code, order.direction, int(order.quantity - order.filled_quantity), now)

@@ -13,6 +13,8 @@ from se.infras.models import TimeSeriesModel, DataRecordModel, TimeSeriesDataMod
     UserOrderModel, UserOrderExecutionModel
 import logging
 
+from se.infras.td import TDAccount
+
 
 class AccountRepoImpl(AccountRepo):
 
@@ -25,6 +27,8 @@ class AccountRepoImpl(AccountRepo):
             account = IBAccount(account_model.name, account_model.initial_cash)
         elif account_model.tp == 'BacktestAccount':
             account = BacktestAccount(account_model.name, account_model.initial_cash)
+        elif account_model.tp == "TDAccount":
+            account = TDAccount(account_model.name, account_model.initial_cash)
         else:
             raise RuntimeError("wrong account type")
 
