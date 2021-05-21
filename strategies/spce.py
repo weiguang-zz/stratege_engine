@@ -57,8 +57,8 @@ class SPCEStrategy(AbstractStrategy):
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
         self.code = self.scope.codes[0]
-        self.long_leverage = 0
-        self.short_leverage = 1.5
+        self.long_leverage = 2
+        self.short_leverage = 1
 
     def market_open(self, event: Event, account: AbstractAccount, data_portal: DataPortal):
         dest_position = 0
