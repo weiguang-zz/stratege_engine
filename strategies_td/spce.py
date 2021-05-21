@@ -28,7 +28,7 @@ class SPCEStrategy(AbstractStrategy):
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose())
             market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen())
         else:
-            market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen(second_offset=-600))
+            market_open = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketOpen(second_offset=10))
             market_close = EventDefinition(ed_type=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=-60))
             market_close_set_price = EventDefinition(ed_type=EventDefinitionType.TIME,
                                                      time_rule=MarketClose())
@@ -51,8 +51,8 @@ class SPCEStrategy(AbstractStrategy):
                              .format(self.last_open, self.last_close, df.iloc[-1]['start_time']))
             else:
                 raise RuntimeError("没有获取到昨日开盘价和收盘价")
-            self.last_open = 35.17
-            self.last_close = 38
+            # self.last_open = 35.17
+            # self.last_close = 38
 
         if len(self.scope.codes) != 1:
             raise RuntimeError("wrong codes")
@@ -82,7 +82,8 @@ class SPCEStrategy(AbstractStrategy):
         if len(account.positions) > 0:
             current_position = account.positions[self.code]
 
-        if current_price and self.last_open and self.last_close and self.last_close > self.last_open:
+        # if current_price and self.last_open and self.last_close and self.last_close > self.last_open:
+        if True:
             dest_position = - int(net_value / current_price)
 
         change = dest_position - current_position
@@ -137,7 +138,8 @@ class SPCEStrategy(AbstractStrategy):
         except:
             logging.error("没有获取到最新的买卖价,code:{}".format(self.code))
 
-        if current_price and self.last_close and current_price > self.last_close:
+        # if current_price and self.last_close and current_price > self.last_close:
+        if True:
             dest_position = int(net_value * self.long_leverage / current_price)
 
         if len(account.positions) > 0:
