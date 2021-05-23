@@ -357,6 +357,10 @@ class AbstractAccount(metaclass=ABCMeta):
     def match(self, data):
         pass
 
+    @abstractmethod
+    def valid_scope(self, data):
+        pass
+
     def save(self):
         account_repo: AccountRepo = BeanContainer.getBean(AccountRepo)
         account_repo.save(self)
@@ -486,6 +490,9 @@ class BacktestAccount(AbstractAccount):
 
     def update_order(self, order, reason):
         raise NotImplementedError
+
+    def valid_scope(self, data):
+        pass
 
     def match(self, data):
         open_orders = self.get_open_orders()

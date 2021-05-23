@@ -30,7 +30,7 @@ from trading_calendars import TradingCalendar
 from se.domain2.account.account import AbstractAccount, Order, OrderCallback, MKTOrder, OrderDirection, LimitOrder, \
     DelayMKTOrder, CrossMKTOrder, CrossDirection, Tick, OrderExecution, Operation, OrderStatus
 from se.domain2.domain import send_email
-from se.domain2.engine.engine import BidAsk
+from se.domain2.engine.engine import BidAsk, Scope
 from se.domain2.monitor import alarm, AlarmLevel, EscapeParam, do_log, retry
 from se.domain2.time_series.time_series import TimeSeriesFunction, Column, Asset, HistoryDataQueryCommand, \
     TSData, Price, Tick
@@ -372,6 +372,13 @@ class IBClient(EWrapper):
 
 
 class IBAccount(AbstractAccount, EWrapper):
+
+    def valid_scope(self, scope: Scope):
+        # 校验code是否能够查询到合约
+        for code in scope.codes:
+            contract = self.cli.code_to_contract(code)
+            if not contract:
+                raise RuntimeError("没有查询到合约，code:"+code)
 
     @do_log(target_name='取消订单', escape_params=[EscapeParam(index=0, key='self')])
     @alarm(target='取消订单', escape_params=[EscapeParam(index=0, key='self')])

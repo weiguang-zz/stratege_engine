@@ -17,6 +17,7 @@ if not acc:
 
 acc.with_order_callback(strategy).with_client(config.get('ib_account', 'host'), config.getint('ib_account', 'port'),
                                               config.getint('ib_account', 'client_id'))
+acc.valid_scope(scope)
 acc.start_save_thread()
 acc.start_sync_order_executions_thread()
 

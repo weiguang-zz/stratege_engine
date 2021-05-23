@@ -6,6 +6,7 @@ from td.client import TDClient
 
 from se.domain2.account.account import *
 from se.domain2.account.account import AbstractAccount, Order
+from se.domain2.engine.engine import Scope
 from se.domain2.monitor import retry
 
 
@@ -130,6 +131,19 @@ class TDAssetType(Enum):
 
 
 class TDAccount(AbstractAccount):
+
+    def valid_scope(self, scope: Scope):
+        for code in scope.codes:
+            cc = code.split("_")
+            symbol = cc[0]
+            symbol_type = cc[1]
+            if symbol_type != 'STK':
+                raise NotImplementedError
+            res = self.client.search_instruments(symbol, "symbol-search")
+            if not res or len(res) <= 0 or symbol not in res:
+                raise RuntimeError("没有查询到资产,code:"+code)
+            if res[symbol]['assetType'] != 'EQUITY':
+                raise RuntimeError("资产不是股票类型，暂不支持")
 
     def __init__(self, name: str, initial_cash: float):
         super().__init__(name, initial_cash)
