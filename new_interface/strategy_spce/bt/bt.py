@@ -1,12 +1,9 @@
 import pandas as pd
+from trading_calendars import get_calendar
 
 from se2.domain.engine import *
-from se2.domain.account import *
-from se2.domain.time_series import *
 from strategies_v2.test import SPCEStrategy
 
-
-from trading_calendars import get_calendar
 code = 'SPCE_STK_USD_SMART'
 
 data_portal = DataPortal(True, "ibAdjustedDailyBar", [code])

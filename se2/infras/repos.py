@@ -80,9 +80,14 @@ class TSDataRepoImpl(TSDataRepo):
 class AccountRepoImpl(AccountRepo):
     def save(self, account: AbstractAccount):
         tp = type(account).__name__
-        acc = AccountModel.create(tp=tp, name=account.name, cash=account.cash, initial_cash=account.initial_cash,
-                                  positions=account.positions,
-                                  history_net_value=account.history_net_value)
+        kwargs = {
+            "tp": tp, 'name': account.name,
+            'cash': account.cash, 'initial_cash': account.initial_cash,
+            'positions': account.positions, 'history_net_value': account.history_net_value
+        }
+        if isinstance(account, TDAccount):
+            kwargs.update({'account_id': account.account_id})
+        acc = AccountModel.create(**kwargs)
         acc.save()
 
     def find_one(self, account_name):
@@ -95,7 +100,7 @@ class AccountRepoImpl(AccountRepo):
         elif account_model.tp == 'BacktestAccount':
             account = BacktestAccount(account_model.name, account_model.initial_cash)
         elif account_model.tp == "TDAccount":
-            account = TDAccount(account_model.name, account_model.initial_cash)
+            account = TDAccount(account_model.name, account_model.initial_cash, account_model.account_id)
         else:
             raise RuntimeError("wrong account type")
 

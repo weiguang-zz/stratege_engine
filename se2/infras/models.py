@@ -47,6 +47,7 @@ class UserOrderModel(Model):
     real_order_id = columns.Text()
     failed_reason = columns.Text()
     cancel_reason = columns.Text()
+    ideal_price = columns.Float()
 
     filled_start_time = columns.DateTime()
     filled_end_time = columns.DateTime()
@@ -66,6 +67,7 @@ class AccountModel(Model):
     cash = columns.Float(required=True)
     initial_cash = columns.Float(required=True)
     positions = columns.Map(key_type=columns.Text, value_type=columns.Float, default={})
+    account_id = columns.Text()
     history_net_value = columns.Map(key_type=columns.DateTime(), value_type=columns.Float(), default={})
 
 

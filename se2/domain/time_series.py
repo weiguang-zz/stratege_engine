@@ -433,6 +433,11 @@ class RTTimeSeriesType(TimeSeriesType, metaclass=ABCMeta):
                         self.sub_map[code].append(subscriber)
                 else:
                     self.sub_map[code] = [subscriber]
+        else:
+            for code in codes:
+                if code not in self.sub_map:
+                    self.sub_map[code] = []
+
 
     @abstractmethod
     def do_sub(self, codes: List[str]):
@@ -445,7 +450,7 @@ class RTTimeSeriesType(TimeSeriesType, metaclass=ABCMeta):
             for code in need_unsub_codes:
                 self.sub_codes.remove(code)
         for code in codes:
-            if code in self.sub_map and subscriber in self.sub_map[code]:
+            if subscriber and code in self.sub_map and subscriber in self.sub_map[code]:
                 self.sub_map[code].remove(subscriber)
 
     @abstractmethod

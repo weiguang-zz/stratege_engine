@@ -36,11 +36,12 @@ else:
     logging.info("没有log的配置文件,将使用默认配置")
 
 # 初始化告警配置
-common.initialize_email_alarm(
-    EmailAlarmConfig(config.getboolean('alarm', 'is_activate'), config.get('alarm', 'account_name'),
-                     config.get('alarm', 'host_server'), config.get('alarm', 'username'),
-                     config.get('alarm', 'password'), config.get('alarm', 'sender_email'),
-                     config.get('alarm', 'receiver')))
+if 'alarm' in config.sections():
+    common.initialize_email_alarm(
+        EmailAlarmConfig(config.getboolean('alarm', 'is_activate'), config.get('alarm', 'account_name'),
+                         config.get('alarm', 'host_server'), config.get('alarm', 'username'),
+                         config.get('alarm', 'password'), config.get('alarm', 'sender_email'),
+                         config.get('alarm', 'receiver')))
 
 # 初始化DB连接
 connection.setup(config.get("cassandra", "contact_points").split(","),
@@ -48,11 +49,13 @@ connection.setup(config.get("cassandra", "contact_points").split(","),
                  port=config.getint("cassandra", "port"))
 
 # ib初始化
-ib.initialize(config.get("ib", "host"), config.getint("ib", 'port'),
-              config.getint('ib', 'client_id'))
+if 'ib' in config.sections():
+    ib.initialize(config.get("ib", "host"), config.getint("ib", 'port'),
+                  config.getint('ib', 'client_id'))
 
 # td初始化
-td.initialize(config.get('td', 'client_id'), config.get('td', 'redirect_uri'), config.get('td', 'credentials_path'))
+if 'td' in config.sections():
+    td.initialize(config.get('td', 'client_id'), config.get('td', 'redirect_uri'), config.get('td', 'credentials_path'))
 
 
 logging.info("应用初始化成功")

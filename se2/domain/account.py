@@ -51,7 +51,7 @@ class Execution(object):
 
 class Order(metaclass=ABCMeta):
 
-    def __init__(self, code, direction, quantity, place_time, reason):
+    def __init__(self, code, direction, quantity, place_time, reason, ideal_price):
         self.code = code
         self.direction = direction
         self.quantity = quantity
@@ -62,6 +62,7 @@ class Order(metaclass=ABCMeta):
         self.reason = reason
         self.remark = None
         self.real_order_id = None
+        self.ideal_price = ideal_price
         # 成交数据
         self.filled_start_time = None
         self.filled_end_time = None
@@ -87,13 +88,15 @@ class Order(metaclass=ABCMeta):
             pass
         elif self.status == OrderStatus.CREATED:
             self.status = OrderStatus.SUBMITTED
-            self.order_status_callback.order_status_change(self)
+            if self.order_status_callback:
+                self.order_status_callback.order_status_change(self)
 
     def failed(self, reason):
         if self.status == OrderStatus.CREATED:
             self.failed_reason = reason
             self.status = OrderStatus.FAILED
-            self.order_status_callback.order_status_change(self)
+            if self.order_status_callback:
+                self.order_status_callback.order_status_change(self)
             self.save()
         else:
             raise RuntimeError("非法的订单状态")
@@ -102,7 +105,8 @@ class Order(metaclass=ABCMeta):
         if self.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
             self.cancel_reason = reason
             self.status = OrderStatus.CANCELED
-            self.order_status_callback.order_status_change(self)
+            if self.order_status_callback:
+                self.order_status_callback.order_status_change(self)
             self.save()
         else:
             raise RuntimeError("非法的订单状态")
@@ -161,14 +165,16 @@ class Order(metaclass=ABCMeta):
         elif self.filled_quantity == self.quantity:
             if self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
                 self.status = OrderStatus.FILLED
-                self.order_status_callback.order_status_change(self)
+                if self.order_status_callback:
+                    self.order_status_callback.order_status_change(self)
                 self.save()
             else:
                 raise RuntimeError("非法的订单状态")
         elif self.filled_quantity > 0:
             if self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED]:
                 self.status = OrderStatus.PARTIAL_FILLED
-                self.order_status_callback.order_status_change(self)
+                if self.order_status_callback:
+                    self.order_status_callback.order_status_change(self)
             else:
                 raise RuntimeError("非法的订单状态")
 
@@ -211,8 +217,8 @@ class PriceChange(object):
 
 class LimitOrder(Order):
 
-    def __init__(self, code, direction, quantity, place_time, reason, limit_price: float):
-        super().__init__(code, direction, quantity, place_time, reason)
+    def __init__(self, code, direction, quantity, place_time, reason, ideal_price, limit_price: float):
+        super().__init__(code, direction, quantity, place_time, reason, ideal_price)
         self.limit_price = limit_price
         self.price_change_history: List[PriceChange] = []
 
@@ -252,8 +258,8 @@ class MKTOrder(Order):
         return Execution(str(uuid.uuid1()), 0, self.quantity, current_price.price, current_price.visible_time,
                          0, "bt")
 
-    def __init__(self, code, direction, quantity, place_time, reason):
-        super().__init__(code, direction, quantity, place_time, reason)
+    def __init__(self, code, direction, quantity, place_time, reason, ideal_price):
+        super().__init__(code, direction, quantity, place_time, reason, ideal_price)
 
 
 class StopOrder(Order):
@@ -272,8 +278,8 @@ class StopOrder(Order):
     def current_price_match(self, current_price: CurrentPrice) -> Execution:
         pass
 
-    def __init__(self, code, direction, quantity, place_time, reason, stop_price: float):
-        super().__init__(code, direction, quantity, place_time, reason)
+    def __init__(self, code, direction, quantity, place_time, reason, ideal_price, stop_price: float):
+        super().__init__(code, direction, quantity, place_time, reason, ideal_price)
         self.stop_price = stop_price
 
 
@@ -288,6 +294,13 @@ class AbstractAccount(metaclass=ABCMeta):
         self.order_status_callback = None
         # 记录该账户自初始化后新下的订单
         self.new_placed_orders = []
+        self.real_order_id_to_order: Mapping[str, Order] = {}
+
+    def get_order_by_real_order_id(self, real_order_id: str):
+        try:
+            return self.real_order_id_to_order[real_order_id]
+        except KeyError:
+            return None
 
     @abstractmethod
     def match(self, data):
@@ -317,6 +330,7 @@ class AbstractAccount(metaclass=ABCMeta):
             self.do_place_order(order)
             order.submitted()
             self.new_placed_orders.append(order)
+            self.real_order_id_to_order[order.real_order_id] = order
         except Exception as e:
             # import traceback
             # logging.error("{}".format(traceback.format_exc()))

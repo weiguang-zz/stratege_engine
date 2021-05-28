@@ -58,7 +58,7 @@ def synchronized(func):
 
 def send_email(title: str, content: str):
 
-    if not email_alarm_config.is_activate:
+    if not email_alarm_config or not email_alarm_config.is_activate:
         return
 
     def send_with_retry():
