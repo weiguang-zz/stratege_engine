@@ -276,65 +276,65 @@ class AbstractStrategy(OrderStatusCallback, metaclass=ABCMeta):
     def do_order_status_change(self, order):
         pass
 
-    def ensure_order_filled_v2(self, order: LimitOrder, duration: int, delta=0.01):
-        """
-        在duration所指定的时间范围内，跟踪市场上的买一和卖一的价格。 超过duration之后，则挂市价单
-        :param delta:
-        :param order:
-        :param duration:
-        :return:
-        """
-
-        def do_ensure():
-            try:
-                now = Timestamp.now(tz='Asia/Shanghai')
-                threshold = now + Timedelta(seconds=duration)
-                while now <= threshold:
-                    if (order.status == OrderStatus.CANCELED) or (
-                            order.status == OrderStatus.FILLED) or order.status == OrderStatus.FAILED:
-                        logging.info("没有为成交的订单，不需要ensure")
-                        break
-                    current_price = None
-                    try:
-                        current_price: CurrentPrice = self.data_portal.current_price([order.code])[order.code]
-                    except:
-                        pass
-                    if current_price:
-                        if order.direction == OrderDirection.BUY:
-                            target_price = current_price.bid_price + delta
-                            # 乘以1.1是为了防止跟自己的出价进行比较
-                            if abs(target_price - order.limit_price) > delta * 1.1:
-                                self.account.update_order_price(order, target_price, current_price)
-                        else:
-                            target_price = current_price.ask_price - delta
-                            if abs(target_price - order.limit_price) > delta * 1.1:
-                                self.account.update_order_price(order, target_price, current_price)
-                    time.sleep(0.1)
-                    now = Timestamp.now(tz='Asia/Shanghai')
-                if order.status == OrderStatus.CREATED or order.status == OrderStatus.SUBMITTED or \
-                        order.status == OrderStatus.PARTIAL_FILLED:
-                    logging.info("订单在规定时间内没有成交，将会使用市价单挂单")
-                    self.account.cancel_order(order, "没有在规定时间内成交")
-                    new_order = MKTOrder(order.code, order.direction, int(order.quantity - order.filled_quantity), now,
-                                         order.reason)
-                    self.account.place_order(new_order)
-                    # 一般情况下，市价单会立即成交，但是存在某个资产不可卖空的情况，这种情况下，市价单可能会被保留
-                    # 针对这种情况，需要取消掉，以免在不合适的时候成交
-                    time.sleep(10)
-                    if new_order.status == OrderStatus.SUBMITTED or new_order.status == OrderStatus.PARTIAL_FILLED:
-                        logging.info("市价单没有在规定的时间内成交，猜想可能是因为没有资产不可卖空导致的，将会取消订单")
-                        self.account.cancel_order(new_order, "订单没有在规定时间内成交，可能是不可卖空")
-            except:
-                import traceback
-                err_msg = "ensure order filled失败:{}".format(traceback.format_exc())
-                logging.error(err_msg)
-                # 显示告警，因为在线程的Runable方法中，不能再抛出异常。
-                do_alarm('ensure order filled', AlarmLevel.ERROR, None, None, '{}'.format(traceback.format_exc()))
-
-        if not isinstance(order, LimitOrder):
-            raise RuntimeError("wrong order type")
-
-        threading.Thread(name='ensure_order_filled', target=do_ensure).start()
+    # def ensure_order_filled_v2(self, order: LimitOrder, duration: int, delta=0.01):
+    #     """
+    #     在duration所指定的时间范围内，跟踪市场上的买一和卖一的价格。 超过duration之后，则挂市价单
+    #     :param delta:
+    #     :param order:
+    #     :param duration:
+    #     :return:
+    #     """
+    #
+    #     def do_ensure():
+    #         try:
+    #             now = Timestamp.now(tz='Asia/Shanghai')
+    #             threshold = now + Timedelta(seconds=duration)
+    #             while now <= threshold:
+    #                 if (order.status == OrderStatus.CANCELED) or (
+    #                         order.status == OrderStatus.FILLED) or order.status == OrderStatus.FAILED:
+    #                     logging.info("没有为成交的订单，不需要ensure")
+    #                     break
+    #                 current_price = None
+    #                 try:
+    #                     current_price: CurrentPrice = self.data_portal.current_price([order.code])[order.code]
+    #                 except:
+    #                     pass
+    #                 if current_price:
+    #                     if order.direction == OrderDirection.BUY:
+    #                         target_price = current_price.bid_price + delta
+    #                         # 乘以1.1是为了防止跟自己的出价进行比较
+    #                         if abs(target_price - order.limit_price) > delta * 1.1:
+    #                             self.account.update_order_price(order, target_price, current_price)
+    #                     else:
+    #                         target_price = current_price.ask_price - delta
+    #                         if abs(target_price - order.limit_price) > delta * 1.1:
+    #                             self.account.update_order_price(order, target_price, current_price)
+    #                 time.sleep(0.1)
+    #                 now = Timestamp.now(tz='Asia/Shanghai')
+    #             if order.status == OrderStatus.CREATED or order.status == OrderStatus.SUBMITTED or \
+    #                     order.status == OrderStatus.PARTIAL_FILLED:
+    #                 logging.info("订单在规定时间内没有成交，将会使用市价单挂单")
+    #                 self.account.cancel_order(order, "没有在规定时间内成交")
+    #                 new_order = MKTOrder(order.code, order.direction, int(order.quantity - order.filled_quantity), now,
+    #                                      order.reason)
+    #                 self.account.place_order(new_order)
+    #                 # 一般情况下，市价单会立即成交，但是存在某个资产不可卖空的情况，这种情况下，市价单可能会被保留
+    #                 # 针对这种情况，需要取消掉，以免在不合适的时候成交
+    #                 time.sleep(10)
+    #                 if new_order.status == OrderStatus.SUBMITTED or new_order.status == OrderStatus.PARTIAL_FILLED:
+    #                     logging.info("市价单没有在规定的时间内成交，猜想可能是因为没有资产不可卖空导致的，将会取消订单")
+    #                     self.account.cancel_order(new_order, "订单没有在规定时间内成交，可能是不可卖空")
+    #         except:
+    #             import traceback
+    #             err_msg = "ensure order filled失败:{}".format(traceback.format_exc())
+    #             logging.error(err_msg)
+    #             # 显示告警，因为在线程的Runable方法中，不能再抛出异常。
+    #             do_alarm('ensure order filled', AlarmLevel.ERROR, None, None, '{}'.format(traceback.format_exc()))
+    #
+    #     if not isinstance(order, LimitOrder):
+    #         raise RuntimeError("wrong order type")
+    #
+    #     threading.Thread(name='ensure_order_filled', target=do_ensure).start()
 
     @abstractmethod
     def do_initialize(self):

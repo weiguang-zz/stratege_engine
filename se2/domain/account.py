@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import time
 import uuid
 from abc import ABCMeta, abstractmethod
 
 from se2.domain.common import *
-from se2.domain.time_series import CurrentPrice, Bar
+from se2.domain.time_series import CurrentPrice, Bar, TimeSeries
 
 
 class OrderStatusCallback(metaclass=ABCMeta):
@@ -217,13 +218,19 @@ class PriceChange(object):
 
 class LimitOrder(Order):
 
-    def __init__(self, code, direction, quantity, place_time, reason, ideal_price, limit_price: float):
+    def __init__(self, code, direction, quantity, place_time, reason, ideal_price, limit_price: float,
+                 bargin_algo: BarginAlgo = None):
         super().__init__(code, direction, quantity, place_time, reason, ideal_price)
         self.limit_price = limit_price
-        self.price_change_history: List[PriceChange] = []
+        self.bargin_algo: BarginAlgo = bargin_algo
+        if self.limit_price and bargin_algo:
+            raise RuntimeError("不能同时制定limit_price和bargin_algo")
+        if self.bargin_algo:
+            self.bargin_algo.bind_order(self)
+            self.limit_price = self.bargin_algo.initial_limit_price()
 
-    def add_price_change(self, price_change: PriceChange):
-        self.price_change_history.append(price_change)
+    # def add_price_change(self, price_change: PriceChange):
+    #     self.price_change_history.append(price_change)
 
     def bar_match(self, bar: Bar) -> Execution:
         if self.direction == OrderDirection.BUY:
@@ -283,6 +290,81 @@ class StopOrder(Order):
         self.stop_price = stop_price
 
 
+class BarginAlgo(metaclass=ABCMeta):
+    """
+    议价算法，该模型不仅仅持有议价算法，且持有一次议价过程中的价格变化历史，用于后续的分析
+    """
+
+    @abstractmethod
+    def name(self):
+        pass
+
+    @abstractmethod
+    def bargin(self, cp: CurrentPrice) -> PriceChange:
+        pass
+
+    @abstractmethod
+    def initial_limit_price(self) -> float:
+        pass
+
+    def __init__(self, account: AbstractAccount, current_price_ts: TimeSeries, freq: int):
+        self.current_price_ts = current_price_ts
+        self.current_price_history: List[CurrentPrice] = []
+        self.price_change_history: List[PriceChange] = []
+        self.account = account
+        self.order: LimitOrder = None
+        self.freq = freq
+
+    def bind_order(self, order: LimitOrder):
+        self.order = order
+
+    def start_bargin(self):
+        def do_start():
+            while True:
+                if self.order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
+                    try:
+                        cp = self.current_price_ts.current_price([self.order.code])[self.order.code]
+                        self.current_price_history.append(cp)
+                        price_change: PriceChange = self.bargin(cp)
+                        if price_change:
+                            self.account.update_order_price(self.order, price_change.after_price, cp)
+                            self.price_change_history.append(price_change)
+
+                        time.sleep(self.freq)
+                    except:
+                        import traceback
+                        logging.error("议价异常{}".format(traceback.format_exc()))
+                else:
+                    logging.info("议价结束")
+        threading.Thread(target=do_start, name='bargin thread').start()
+
+
+class DefaultBarginAlgo(BarginAlgo):
+
+    def initial_limit_price(self) -> float:
+        cp: CurrentPrice = self.current_price_ts.current_price([self.order.code])[self.order.code]
+        if self.order.direction == OrderDirection.BUY:
+            return cp.ask_price + 0.01
+        elif self.order.direction == OrderDirection.SELL:
+            return cp.bid_price - 0.01
+        else:
+            raise RuntimeError("wrong direction")
+
+    def name(self):
+        return 'default'
+
+    def bargin(self, cp: CurrentPrice) -> PriceChange:
+        if self.order.direction == OrderDirection.BUY:
+            if cp.bid_price > self.order.limit_price:
+                new_price = cp.bid_price + 0.01
+                return PriceChange(cp.visible_time, self.order.limit_price, new_price, cp)
+        elif self.order.direction == OrderDirection.SELL:
+            if cp.ask_price < self.order.limit_price:
+                new_price = cp.ask_price - 0.01
+                return PriceChange(cp.visible_time, self.order.limit_price, new_price, cp)
+        return None
+
+
 class AbstractAccount(metaclass=ABCMeta):
 
     def __init__(self, name: str, initial_cash: float):
@@ -331,6 +413,9 @@ class AbstractAccount(metaclass=ABCMeta):
             order.submitted()
             self.new_placed_orders.append(order)
             self.real_order_id_to_order[order.real_order_id] = order
+            if isinstance(order, LimitOrder) and order.bargin_algo:
+                order.bargin_algo.start_bargin()
+
         except Exception as e:
             # import traceback
             # logging.error("{}".format(traceback.format_exc()))
@@ -370,10 +455,8 @@ class AbstractAccount(metaclass=ABCMeta):
         if not isinstance(order, LimitOrder):
             raise RuntimeError("只适用于限价单")
         try:
-            price_change = PriceChange(current_price.visible_time, order.limit_price, new_price, current_price)
             order.limit_price = new_price
             self.do_update_order_price(order)
-            order.add_price_change(price_change)
         except Exception as e:
             raise e
 

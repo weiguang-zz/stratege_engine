@@ -144,10 +144,14 @@ class OrderRepoImpl(OrderRepo):
         kwargs.update({"direction": order.direction.value, "status": order.status.value,
                        "execution_map": execution_model_map, "type": tp})
         if isinstance(order, LimitOrder):
+            current_price_models = [CurrentPriceModel(**current_price.__dict__)
+                                    for current_price in order.bargin_algo.current_price_history]
             price_change_models = [self._to_price_change_model(price_change)
-                                   for price_change in order.price_change_history]
-            kwargs.update({"price_change_history": price_change_models})
-        for name in ['extended_time', 'order_status_callback', 'executions']:
+                                   for price_change in order.bargin_algo.price_change_history]
+            kwargs.update({"bargin": BarginModel(current_price_history=current_price_models,
+                                                 price_change_history=price_change_models,
+                                                 name=order.bargin_algo.name())})
+        for name in ['extended_time', 'order_status_callback', 'executions', 'bargin_algo']:
             kwargs.pop(name)
         order_model = UserOrderModel.create(**kwargs)
         order_model.save()

@@ -33,8 +33,15 @@ class PriceChangeModel(UserType):
     current_price = UserDefinedType(CurrentPriceModel)
 
 
+class BarginModel(UserType):
+    __type_name__ = 'bargin'
+    name = columns.Text(required=True)
+    current_price_history = columns.List(value_type=CurrentPriceModel, default=[])
+    price_change_history = columns.List(value_type=PriceChangeModel, default=[])
+
+
 class UserOrderModel(Model):
-    __table_name__ = "user_order3"
+    __table_name__ = "user_order4"
     account_name = columns.Text(required=True, primary_key=True)
     place_time = columns.DateTime(required=True, primary_key=True, clustering_order='ASC')
     type = columns.Text(required=True)
@@ -57,7 +64,8 @@ class UserOrderModel(Model):
     limit_price = columns.Float()
     stop_price = columns.Float()
     execution_map = columns.Map(key_type=columns.Text, value_type=UserDefinedType(UserOrderExecutionModel), default={})
-    price_change_history = columns.List(value_type=UserDefinedType(PriceChangeModel), default=[])
+    # price_change_history = columns.List(value_type=UserDefinedType(PriceChangeModel), default=[])
+    bargin = columns.UserDefinedType(BarginModel)
 
 
 class AccountModel(Model):
