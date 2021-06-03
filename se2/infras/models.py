@@ -36,8 +36,8 @@ class PriceChangeModel(UserType):
 class BarginModel(UserType):
     __type_name__ = 'bargin'
     name = columns.Text(required=True)
-    current_price_history = columns.List(value_type=CurrentPriceModel, default=[])
-    price_change_history = columns.List(value_type=PriceChangeModel, default=[])
+    current_price_history = columns.List(value_type=UserDefinedType(CurrentPriceModel), default=[])
+    price_change_history = columns.List(value_type=UserDefinedType(PriceChangeModel), default=[])
 
 
 class UserOrderModel(Model):

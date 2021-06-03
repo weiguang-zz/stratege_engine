@@ -49,7 +49,7 @@ class IBAccount(AbstractAccount):
     def do_cancel_order(self, order: Order):
         pass
 
-    def do_update_order_price(self, order):
+    def do_update_order_price(self, order, new_price):
         pass
 
     def valid_scope(self, codes):

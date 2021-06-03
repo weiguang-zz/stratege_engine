@@ -225,9 +225,11 @@ class LimitOrder(Order):
         self.bargin_algo: BarginAlgo = bargin_algo
         if self.limit_price and bargin_algo:
             raise RuntimeError("不能同时制定limit_price和bargin_algo")
+        if not self.limit_price and not bargin_algo:
+            raise RuntimeError("limit price和bargin_algo必须指定一个")
         if self.bargin_algo:
             self.bargin_algo.bind_order(self)
-            self.limit_price = self.bargin_algo.initial_limit_price()
+            # self.limit_price = self.bargin_algo.initial_limit_price()
 
     # def add_price_change(self, price_change: PriceChange):
     #     self.price_change_history.append(price_change)
@@ -303,8 +305,15 @@ class BarginAlgo(metaclass=ABCMeta):
     def bargin(self, cp: CurrentPrice) -> PriceChange:
         pass
 
-    @abstractmethod
     def initial_limit_price(self) -> float:
+        cp = self.current_price_ts.current_price([self.order.code])[self.order.code]
+        price: float = self.do_get_initial_limit_price(cp)
+        self.price_change_history.append(PriceChange(cp.visible_time, -1, price, cp))
+        self.latest_price = price
+        return price
+
+    @abstractmethod
+    def do_get_initial_limit_price(self, cp: CurrentPrice) -> float:
         pass
 
     def __init__(self, account: AbstractAccount, current_price_ts: TimeSeries, freq: int):
@@ -314,6 +323,7 @@ class BarginAlgo(metaclass=ABCMeta):
         self.account = account
         self.order: LimitOrder = None
         self.freq = freq
+        self.latest_price = None
 
     def bind_order(self, order: LimitOrder):
         self.order = order
@@ -323,12 +333,16 @@ class BarginAlgo(metaclass=ABCMeta):
             while True:
                 if self.order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
                     try:
-                        cp = self.current_price_ts.current_price([self.order.code])[self.order.code]
+                        cp:CurrentPrice = self.current_price_ts.current_price([self.order.code])[self.order.code]
                         self.current_price_history.append(cp)
                         price_change: PriceChange = self.bargin(cp)
                         if price_change:
-                            self.account.update_order_price(self.order, price_change.after_price, cp)
-                            self.price_change_history.append(price_change)
+                            # 由于订单执行详情是在异步的线程中更新的，所以这个时候订单可能已经成交的
+                            # 在任何跟订单状态有关系的操作之前，都进行这个判断是合理的
+                            if self.order.status != OrderStatus.FILLED:
+                                self.account.update_order_price(self.order, price_change.after_price)
+                                self.price_change_history.append(price_change)
+                                self.latest_price = price_change.after_price
 
                         time.sleep(self.freq)
                     except:
@@ -336,32 +350,38 @@ class BarginAlgo(metaclass=ABCMeta):
                         logging.error("议价异常{}".format(traceback.format_exc()))
                 else:
                     logging.info("议价结束")
+                    break
+
         threading.Thread(target=do_start, name='bargin thread').start()
 
 
 class DefaultBarginAlgo(BarginAlgo):
 
-    def initial_limit_price(self) -> float:
-        cp: CurrentPrice = self.current_price_ts.current_price([self.order.code])[self.order.code]
+    def do_get_initial_limit_price(self, cp: CurrentPrice) -> float:
         if self.order.direction == OrderDirection.BUY:
-            return cp.ask_price + 0.01
+            return round(cp.bid_price + self.delta, 2)
         elif self.order.direction == OrderDirection.SELL:
-            return cp.bid_price - 0.01
+            return round(cp.ask_price - self.delta, 2)
         else:
             raise RuntimeError("wrong direction")
+
+    def __init__(self, account: AbstractAccount, current_price_ts: TimeSeries, freq: int, delta=0.01):
+        super().__init__(account, current_price_ts, freq)
+        self.delta = delta
 
     def name(self):
         return 'default'
 
     def bargin(self, cp: CurrentPrice) -> PriceChange:
         if self.order.direction == OrderDirection.BUY:
-            if cp.bid_price > self.order.limit_price:
-                new_price = cp.bid_price + 0.01
-                return PriceChange(cp.visible_time, self.order.limit_price, new_price, cp)
+            # 小数的相减是有误差的，比如32.92-0.01=32.910000000000004
+            if round(cp.bid_price + self.delta, 2) > self.latest_price:
+                new_price = round(cp.bid_price + self.delta, 2)
+                return PriceChange(cp.visible_time, self.latest_price, new_price, cp)
         elif self.order.direction == OrderDirection.SELL:
-            if cp.ask_price < self.order.limit_price:
-                new_price = cp.ask_price - 0.01
-                return PriceChange(cp.visible_time, self.order.limit_price, new_price, cp)
+            if round(cp.ask_price-self.delta, 2) < self.latest_price:
+                new_price = round(cp.ask_price - self.delta, 2)
+                return PriceChange(cp.visible_time, self.latest_price, new_price, cp)
         return None
 
 
@@ -376,7 +396,7 @@ class AbstractAccount(metaclass=ABCMeta):
         self.order_status_callback = None
         # 记录该账户自初始化后新下的订单
         self.new_placed_orders = []
-        self.real_order_id_to_order: Mapping[str, Order] = {}
+        self.real_order_id_to_order: Dict[str, Order] = {}
 
     def get_order_by_real_order_id(self, real_order_id: str):
         try:
@@ -451,19 +471,19 @@ class AbstractAccount(metaclass=ABCMeta):
 
     @do_log(target_name='更新订单', escape_params=[EscapeParam(index=0, key='self')])
     @alarm(target='更新订单', escape_params=[EscapeParam(index=0, key='self')])
-    def update_order_price(self, order, new_price: float, current_price: CurrentPrice):
+    def update_order_price(self, order, new_price: float):
         if not isinstance(order, LimitOrder):
             raise RuntimeError("只适用于限价单")
         try:
-            order.limit_price = new_price
-            self.do_update_order_price(order)
+            self.do_update_order_price(order, new_price)
         except Exception as e:
             raise e
 
     @abstractmethod
-    def do_update_order_price(self, order):
+    def do_update_order_price(self, order, new_price):
         """
         由子类实现，约定为如果成功，则方法正常结束，如果失败则抛出异常
+        :param new_price:
         :param order:
         :return:
         """

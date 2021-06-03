@@ -233,7 +233,7 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
                 new_kwargs = kwargs.copy()
                 new_kwargs['escape_params'] = escape_params
                 params_after = build_params_str(*args, **new_kwargs)
-            except RuntimeError as e:
+            except Exception as e:
                 exception = e
                 is_exception = True
 

@@ -1,7 +1,7 @@
 from cassandra.cqlengine.query import ModelQuerySet, BatchQuery
 
 from se2.domain.account import AccountRepo, AbstractAccount, OrderRepo, Order, LimitOrder, Execution, PriceChange, \
-    OrderDirection, MKTOrder, StopOrder
+    OrderDirection, MKTOrder, StopOrder, OrderStatus, DefaultBarginAlgo
 from se2.domain.engine import BacktestAccount
 from se2.domain.time_series import *
 from se2.infras.ib import IBAccount
@@ -123,17 +123,41 @@ class OrderRepoImpl(OrderRepo):
             for row in r.all():
                 if row.type == 'LimitOrder':
                     o = LimitOrder(row.code, OrderDirection(row.direction), row.quantity, to_timestamp(row.place_time),
-                                   row.reason, row.limit_price)
-
+                                   row.reason, row.ideal_price, row.limit_price)
                 elif row.type == "MKTOrder":
                     o = MKTOrder(row.code, OrderDirection(row.direction), row.quantity, to_timestamp(row.place_time),
-                                 row.reason)
+                                 row.reason, row.ideal_price)
                 elif row.type == "StopOrder":
                     o = StopOrder(row.code, OrderDirection(row.direction), row.quantity, to_timestamp(row.place_time),
-                                  row.reason, row.stop_price)
+                                  row.reason, row.ideal_price, row.stop_price)
                 else:
                     raise RuntimeError("非法的订单类型")
-                # todo，补充订单模型的其他属性
+                # 补充订单状态数据
+                o.account_name = row.account_name
+                o.status = OrderStatus(row.status)
+                o.failed_reason = row.failed_reason
+                o.cancel_reason = row.cancel_reason
+                o.reason = row.reason
+                o.remark = row.remark
+                # 补充订单成交数据
+                o.filled_quantity = row.filled_quantity
+                o.filled_avg_price = row.filled_avg_price
+                o.filled_end_time = to_timestamp(row.filled_end_time)
+                o.filled_start_time = to_timestamp(row.filled_start_time)
+                o.fee = row.fee
+                o.real_order_id = row.real_order_id
+                # executions
+                # o.executions = {id: self.to_execution(row.execution_map[id]) for id in row.execution_map}
+                # bargin_model: BarginModel = row.bargin
+                # if bargin_model:
+                #     if bargin_model.name == 'default':
+                #         new_bargin = DefaultBarginAlgo(None, None, None)
+                #         new_bargin.current_price_history = [CurrentPrice(cp.time, ) for cp in
+                #                                             bargin_model.current_price_history]
+                #         pass
+                #     else:
+                #         raise NotImplementedError
+
                 ret.append(o)
         return ret
 
@@ -143,9 +167,12 @@ class OrderRepoImpl(OrderRepo):
         execution_model_map = {id: self._to_execution_model(order.executions[id]) for id in order.executions}
         kwargs.update({"direction": order.direction.value, "status": order.status.value,
                        "execution_map": execution_model_map, "type": tp})
-        if isinstance(order, LimitOrder):
-            current_price_models = [CurrentPriceModel(**current_price.__dict__)
-                                    for current_price in order.bargin_algo.current_price_history]
+        if isinstance(order, LimitOrder) and order.bargin_algo:
+            current_price_models = [
+                CurrentPriceModel(time=current_price.visible_time, ask_price=current_price.ask_price,
+                                  ask_size=current_price.ask_size, bid_price=current_price.bid_price,
+                                  bid_size=current_price.bid_size, price=current_price.price)
+                for current_price in order.bargin_algo.current_price_history]
             price_change_models = [self._to_price_change_model(price_change)
                                    for price_change in order.bargin_algo.price_change_history]
             kwargs.update({"bargin": BarginModel(current_price_history=current_price_models,
@@ -161,5 +188,9 @@ class OrderRepoImpl(OrderRepo):
 
     def _to_price_change_model(self, price_change: PriceChange):
         kwargs = price_change.__dict__.copy()
-        kwargs.update({"current_price": CurrentPriceModel(**price_change.current_price.__dict__)})
+        current_price = price_change.current_price
+        kwargs.update(
+            {"current_price": CurrentPriceModel(time=current_price.visible_time, ask_price=current_price.ask_price,
+                                                ask_size=current_price.ask_size, bid_price=current_price.bid_price,
+                                                bid_size=current_price.bid_size, price=current_price.price)})
         return PriceChangeModel(**kwargs)

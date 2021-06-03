@@ -44,6 +44,8 @@ class BacktestAccount(AbstractAccount):
                     self.order_filled(t[0], [t[1]])
 
     def do_place_order(self, order: Order):
+        if isinstance(order, LimitOrder) and order.bargin_algo:
+            raise RuntimeError('回测环境中不支持议价')
         # 尝试使用当前价格进行撮合
         cp: CurrentPrice = self.data_portal.current_price([order.code], order.place_time)[order.code]
         execution = order.current_price_match(cp)
@@ -53,7 +55,7 @@ class BacktestAccount(AbstractAccount):
     def do_cancel_order(self, order: Order):
         pass
 
-    def do_update_order_price(self, order):
+    def do_update_order_price(self, order, new_price):
         raise NotImplementedError
 
     def valid_scope(self, codes):

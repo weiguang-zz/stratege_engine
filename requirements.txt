@@ -10,3 +10,4 @@ PyYAML
 scipy
 statsmodels
 td-ameritrade-python-api
+websockets==8.1

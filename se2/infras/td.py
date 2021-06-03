@@ -83,23 +83,30 @@ class TDAccount(AbstractAccount):
             raise RuntimeError("没有td订单号")
         if order.status == OrderStatus.CANCELED:
             return
-        # 下面方法如果失败会抛异常
+        # 如果订单已成交，下面方法不会抛异常
         self.client.cancel_order(self.account_id, order.real_order_id)
 
-    def do_update_order_price(self, order):
+    def do_update_order_price(self, order, new_price):
         """
         对于td来说，取消订单等价于取消原来的订单，然后重新下一个订单。但是在框架层面仍然要维持同一个订单
+        :param new_price:
         :param order:
         :return:
         """
         if not order.real_order_id:
             raise RuntimeError("没有td订单号")
-        self.do_cancel_order(order)
-        new_order = LimitOrder(order.code, order.direction, order.quantity - order.filled_quantity,
-                               Timestamp.now(tz='Asia/Shanghai'), "更新订单", order.ideal_price,
-                               order.limit_price)
-        self.do_place_order(new_order)
-        order.set_real_order_id(new_order.real_order_id)
+        if order.status != OrderStatus.FILLED:
+            self.do_cancel_order(order)
+        # 因为监听订单成交详情是在独立的线程中，所以在任何操作之前，订单状态都有可能变成成交的状态
+        if order.status != OrderStatus.FILLED:
+            new_order = LimitOrder(order.code, order.direction, order.quantity - order.filled_quantity,
+                                   Timestamp.now(tz='Asia/Shanghai'), "更新订单", order.ideal_price,
+                                   new_price)
+            self.do_place_order(new_order)
+            # 更新real_order_id到order的映射
+            self.real_order_id_to_order.pop(order.real_order_id)
+            order.set_real_order_id(new_order.real_order_id)
+            self.real_order_id_to_order[new_order.real_order_id] = order
 
     def valid_scope(self, codes):
         for code in codes:
@@ -168,7 +175,8 @@ class TDAccount(AbstractAccount):
             "orderLegCollection": [order_leg]
         }
         if isinstance(order, LimitOrder):
-            td_order["price"] = order.limit_price
+            lp = order.limit_price if order.limit_price else order.bargin_algo.initial_limit_price()
+            td_order["price"] = round(lp, 2)
         if isinstance(order, StopOrder):
             td_order['stopPrice'] = order.stop_price
 
