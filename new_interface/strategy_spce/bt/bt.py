@@ -2,7 +2,7 @@ import pandas as pd
 from trading_calendars import get_calendar
 
 from se2.domain.engine import *
-from strategies_v2.test import SPCEStrategy
+from new_interface.strategy_spce.st import SPCEStrategy
 
 code = 'SPCE_STK_USD_SMART'
 
