@@ -5,7 +5,7 @@ import yaml
 from cassandra.cqlengine import connection
 
 from se2.domain import common
-from se2.infras.ib import *
+from se2.infras.ib2 import *
 from se2.infras.repos import *
 from se2.infras.td import *
 
@@ -13,6 +13,7 @@ from se2.infras.td import *
 BeanContainer.register(TimeSeriesRepo, TimeSeriesRepoImpl())
 BeanContainer.register(AccountRepo, AccountRepoImpl())
 BeanContainer.register(OrderRepo, OrderRepoImpl())
+BeanContainer.register(TSDataRepo, TSDataRepoImpl())
 
 # 读取配置文件， 默认从运行目录读取config.ini, 用户可以通过config.dir环境变量来覆盖
 if not os.getenv("config.dir"):
@@ -50,7 +51,7 @@ connection.setup(config.get("cassandra", "contact_points").split(","),
 
 # ib初始化
 if 'ib' in config.sections():
-    ib.initialize(config.get("ib", "host"), config.getint("ib", 'port'),
+    ib2.initialize(config.get("ib", "host"), config.getint("ib", 'port'),
                   config.getint('ib', 'client_id'))
 
 # td初始化

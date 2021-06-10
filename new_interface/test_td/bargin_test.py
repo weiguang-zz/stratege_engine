@@ -15,15 +15,14 @@ realtime_ts: TimeSeries = ts_repo.find_one("ibCurrentPrice")
 realtime_ts.subscribe(None, [code])
 time.sleep(2)
 
-bargin_algo:BarginAlgo = DefaultBarginAlgo(acc, realtime_ts, 1, -0.01)
+bargainer:Bargainer = Bargainer(acc, realtime_ts, 1, DefaultBargainAlgo(0.01))
 order: Order = LimitOrder(code, OrderDirection.BUY, 1, Timestamp.now(), "test", 33, None,
-                          bargin_algo=bargin_algo)
+                          bargainer=bargainer)
 order.extended_time = True
 
-acc.place_order(order)
-# res = acc.client.cancel_order(acc.account_id, "4481916136")
+# acc.place_order(order)
 
-# order_repo: OrderRepo = BeanContainer.getBean(OrderRepo)
-# orders = order_repo.find_by_account_name("test")
+order_repo: OrderRepo = BeanContainer.getBean(OrderRepo)
+orders = order_repo.find_by_account_name("td_test4")
 
 print("done")

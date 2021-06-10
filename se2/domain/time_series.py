@@ -361,7 +361,7 @@ class BarHistoryTimeSeriesType(HistoryTimeSeriesType, metaclass=ABCMeta):
 
     def current_price_in_history(self, codes, the_time: Timestamp, ts: TimeSeries) -> Mapping[str, CurrentPrice]:
         """
-        获取历史上某个时间点的价格，因为该时序类型是日k，所以只能获取交易日开盘以及收盘的价格。 为了提高性能，该方法会使用内存缓存
+        获取历史上某个时间点的价格，因为该时序类型是Bar类型，所以只能获取交易日开盘以及收盘的价格。 为了提高性能，该方法会使用内存缓存
         :param codes:
         :param the_time:
         :param ts:
@@ -406,14 +406,14 @@ class BarHistoryTimeSeriesType(HistoryTimeSeriesType, metaclass=ABCMeta):
 
     def __init__(self, current_price_change_start_offset: Timedelta, current_price_change_end_offset: Timedelta):
         super().__init__()
-        self.cp_mem_cache: Mapping[str, DataFrame] = {}
+        self.cp_mem_cache: Dict[str, DataFrame] = {}
         self.current_price_change_start_offset = current_price_change_start_offset
         self.current_price_change_end_offset = current_price_change_end_offset
 
 
 class RTTimeSeriesType(TimeSeriesType, metaclass=ABCMeta):
     @abstractmethod
-    def current_price(self, codes) -> Mapping[str, CurrentPrice]:
+    def current_price(self, codes) -> Dict[str, CurrentPrice]:
         """
         获取实时数据
         :param codes:
@@ -495,7 +495,8 @@ class TimeSeries(object):
                 raise RuntimeError("历史的实时价格需要从历史的时序类型获取")
             return self.tp.current_price_in_history(codes, time, self)
 
-    def history_data(self, command: HistoryDataQueryCommand, from_local: bool = False) -> DataFrame:
+    def history_data(self, command: HistoryDataQueryCommand, from_local: bool = False,
+                     remove_duplicated: bool = True) -> DataFrame:
         """
         返回DataFrame， index为[visible_time, code]
         :param command:
@@ -523,6 +524,9 @@ class TimeSeries(object):
             df_data.append(ts_data.to_dict())
 
         df = DataFrame(data=df_data).set_index(['visible_time', 'code'])
+        # 去重
+        if remove_duplicated:
+            df = df[~df.index.duplicated()]
         # 由于下载是批量下载，所以下载的数据可能比想要下载的数据要多
         if command.start and command.end:
             return df.sort_index(level=0).loc[command.start: command.end]
@@ -541,6 +545,8 @@ class TimeSeries(object):
         self.tp.unsub_func(subscriber, codes)
 
     def download_data(self, command: HistoryDataQueryCommand):
+        if not isinstance(self.tp, HistoryTimeSeriesType):
+            raise RuntimeError("非法的tsType")
         increment_commands = []
         commands: List[SingleCodeQueryCommand] = command.to_single_code_command()
         for command in commands:
@@ -551,6 +557,7 @@ class TimeSeries(object):
 
         total_count = 0
         for i_command in increment_commands:
+
             data_list: List[TSData] = self.tp.load_history_data(i_command)
             ts_data_repo: TSDataRepo = BeanContainer.getBean(TSDataRepo)
             ts_data_repo.save(data_list)
@@ -579,7 +586,7 @@ class TimeSeries(object):
 
 
 class TSTypeRegistry(object):
-    types: Mapping[str, TimeSeriesType] = {}
+    types: Dict[str, TimeSeriesType] = {}
 
     @classmethod
     def find_function(cls, ts_type_name: str) -> TimeSeriesType:

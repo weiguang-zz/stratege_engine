@@ -40,7 +40,7 @@ class TDAccount(AbstractAccount):
     @alarm(level=AlarmLevel.ERROR, target="同步订单成交情况", escape_params=[EscapeParam(index=0, key='self')])
     def sync_order_execution(self, order: Order):
         """
-        同步订单状态以及订单执行情况
+        同步订单状态以及订单执行情况，使用同步的接口，非stream的方式
         :return:
         """
         if not order.real_order_id:
@@ -96,8 +96,11 @@ class TDAccount(AbstractAccount):
         if not order.real_order_id:
             raise RuntimeError("没有td订单号")
         if order.status != OrderStatus.FILLED:
+            # 如果订单已经成交，取消操作也不会报错
             self.do_cancel_order(order)
         # 因为监听订单成交详情是在独立的线程中，所以在任何操作之前，订单状态都有可能变成成交的状态
+        # 即使在下面做了判断，还是可能因为延迟导致服务端其实已经成交，但是因为延迟没有感知到，这种
+        # 情况可能会导致下了过量的订单。这种没有被及时感知到的成交详情可以通过告警发出来，以便及时干预
         if order.status != OrderStatus.FILLED:
             new_order = LimitOrder(order.code, order.direction, order.quantity - order.filled_quantity,
                                    Timestamp.now(tz='Asia/Shanghai'), "更新订单", order.ideal_price,
@@ -175,7 +178,7 @@ class TDAccount(AbstractAccount):
             "orderLegCollection": [order_leg]
         }
         if isinstance(order, LimitOrder):
-            lp = order.limit_price if order.limit_price else order.bargin_algo.initial_limit_price()
+            lp = order.limit_price if order.limit_price else order.bargainer.get_initial_price()
             td_order["price"] = round(lp, 2)
         if isinstance(order, StopOrder):
             td_order['stopPrice'] = order.stop_price
@@ -240,6 +243,8 @@ class OrderFilledMessageHandler(AbstractMessageHandler):
     响应订单成交的消息
     """
 
+    @alarm(level=AlarmLevel.ERROR, target='处理成交详情',
+           escape_params=[EscapeParam(index=0, key='self')])
     def process_message(self, message: Dict):
         if 'data' not in message:
             return
@@ -256,9 +261,12 @@ class OrderFilledMessageHandler(AbstractMessageHandler):
                 order: Order = self.account.get_order_by_real_order_id(order_id)
                 if not order:
                     logging.warning("订单:{}不是该账户发出的，成交详情将会忽略".format(order_id))
+                    # 显示告警，因为这种不正常成交详情可能是因为客户端没有及时感知到，从而导致了错误的操作
+                    do_alarm('未预期到的成交详情', AlarmLevel.ERROR, None, None, '{}'.format(message))
                 else:
                     if order.status not in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
                         logging.warning("订单:{}的状态不对，成交详情将会忽略".format(order.__dict__))
+                        do_alarm('未预期到的成交详情，订单已到终态', AlarmLevel.ERROR, None, None, '{}'.format(message))
                     else:
                         # 处理成交
                         exec_element = root.find('{urn:xmlns:beb.ameritrade.com}ExecutionInformation')
@@ -273,6 +281,8 @@ class OrderFilledMessageHandler(AbstractMessageHandler):
 
 class ResponseMessageHandler(AbstractMessageHandler):
 
+    @alarm(level=AlarmLevel.ERROR, target='处理响应消息',
+           escape_params=[EscapeParam(index=0, key='self')])
     def process_message(self, message: Dict):
         if 'response' not in message:
             return

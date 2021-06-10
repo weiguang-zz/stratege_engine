@@ -179,7 +179,7 @@ class TimeEventThread(Thread):
         self.name = "time_event_thread"
         self.subscriber = subscriber
         for ed in time_event_conditions:
-            if not ed.ed_type == EventDefinitionType.TIME:
+            if not ed.tp == EventDefinitionType.TIME:
                 raise RuntimeError("wrong event definition type")
         self.time_event_conditions = time_event_conditions
         self.calendar = calendar
@@ -417,8 +417,7 @@ class DataPortal(object):
                 raise RuntimeError("need subscribe codes")
             self.current_price_ts.subscribe(None, subscribe_codes)
 
-    def current_price(self, codes: List[str], current_time: Timestamp = None,
-                      delay_allowed: Timedelta = Timedelta(seconds=10)) -> Mapping[str, CurrentPrice]:
+    def current_price(self, codes: List[str], current_time: Timestamp = None) -> Mapping[str, CurrentPrice]:
         """
         若在实盘环境下，current_time参数会被丢弃
         :param delay_allowed:
@@ -431,15 +430,15 @@ class DataPortal(object):
 
         ret = self.current_price_ts.current_price(codes, current_time)
 
-        # 检查数据是否缺失或者有延迟
-        for code in codes:
-            if code not in ret:
-                raise RuntimeError("没有获取到{}的最新价格，当前时间:{}".format(code, current_time))
-            cp = ret[code]
-            if delay_allowed:
-                if current_time - cp.visible_time > delay_allowed:
-                    raise RuntimeError("没有获取到{}的最新价格，当前时间:{}, 最新价格:{}, 允许的延迟:{}".
-                                       format(code, current_time, cp.__dict__, delay_allowed))
+        # # 检查数据是否缺失或者有延迟
+        # for code in codes:
+        #     if code not in ret:
+        #         raise RuntimeError("没有获取到{}的最新价格，当前时间:{}".format(code, current_time))
+        #     cp = ret[code]
+        #     if delay_allowed:
+        #         if current_time - cp.visible_time > delay_allowed:
+        #             raise RuntimeError("没有获取到{}的最新价格，当前时间:{}, 最新价格:{}, 允许的延迟:{}".
+        #                                format(code, current_time, cp.__dict__, delay_allowed))
         return ret
 
 

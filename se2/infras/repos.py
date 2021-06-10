@@ -1,7 +1,7 @@
 from cassandra.cqlengine.query import ModelQuerySet, BatchQuery
 
 from se2.domain.account import AccountRepo, AbstractAccount, OrderRepo, Order, LimitOrder, Execution, PriceChange, \
-    OrderDirection, MKTOrder, StopOrder, OrderStatus, DefaultBarginAlgo
+    OrderDirection, MKTOrder, StopOrder, OrderStatus, Bargainer
 from se2.domain.engine import BacktestAccount
 from se2.domain.time_series import *
 from se2.infras.ib import IBAccount
@@ -59,7 +59,8 @@ class TSDataRepoImpl(TSDataRepo):
                 .order_by("-visible_time").limit(command.window)
 
         func = TSTypeRegistry.find_function(ts_name)
-
+        if not isinstance(func, HistoryTimeSeriesType):
+            raise RuntimeError("非法的tsType")
         for row in r.all():
             values: Mapping[str, object] = func.deserialized(row.data)
             visible_time = Timestamp(row.visible_time, tz='UTC').tz_convert("Asia/Shanghai")
@@ -71,6 +72,8 @@ class TSDataRepoImpl(TSDataRepo):
         b = BatchQuery()
         for ts_data in ts_list:
             func = TSTypeRegistry.find_function(ts_data.ts_type_name)
+            if not isinstance(func, HistoryTimeSeriesType):
+                raise RuntimeError("非法的tsType")
             value_serialized: str = func.serialize(ts_data.values)
             TimeSeriesDataModel.batch(b).create(type=ts_data.ts_type_name, code=ts_data.code,
                                                 visible_time=ts_data.visible_time, data=value_serialized)
@@ -122,8 +125,12 @@ class OrderRepoImpl(OrderRepo):
         else:
             for row in r.all():
                 if row.type == 'LimitOrder':
+                    if row.bargainer:
+                        bargainer = self.build_bargainer(row.bargainer)
+                    else:
+                        bargainer = None
                     o = LimitOrder(row.code, OrderDirection(row.direction), row.quantity, to_timestamp(row.place_time),
-                                   row.reason, row.ideal_price, row.limit_price)
+                                   row.reason, row.ideal_price, row.limit_price, bargainer)
                 elif row.type == "MKTOrder":
                     o = MKTOrder(row.code, OrderDirection(row.direction), row.quantity, to_timestamp(row.place_time),
                                  row.reason, row.ideal_price)
@@ -146,17 +153,16 @@ class OrderRepoImpl(OrderRepo):
                 o.filled_start_time = to_timestamp(row.filled_start_time)
                 o.fee = row.fee
                 o.real_order_id = row.real_order_id
-                # executions
-                # o.executions = {id: self.to_execution(row.execution_map[id]) for id in row.execution_map}
-                # bargin_model: BarginModel = row.bargin
-                # if bargin_model:
-                #     if bargin_model.name == 'default':
-                #         new_bargin = DefaultBarginAlgo(None, None, None)
-                #         new_bargin.current_price_history = [CurrentPrice(cp.time, ) for cp in
-                #                                             bargin_model.current_price_history]
-                #         pass
-                #     else:
-                #         raise NotImplementedError
+                # 构造executions
+                executions = {}
+                for eid in row.execution_map:
+                    execution_model: UserOrderExecutionModel = row.execution_map[eid]
+                    executions[eid] = Execution(execution_model.id, execution_model.version, execution_model.quantity,
+                                                execution_model.price, to_timestamp(execution_model.time),
+                                                execution_model.fee,
+                                                execution_model.real_order_id)
+
+                o.executions = executions
 
                 ret.append(o)
         return ret
@@ -167,18 +173,18 @@ class OrderRepoImpl(OrderRepo):
         execution_model_map = {id: self._to_execution_model(order.executions[id]) for id in order.executions}
         kwargs.update({"direction": order.direction.value, "status": order.status.value,
                        "execution_map": execution_model_map, "type": tp})
-        if isinstance(order, LimitOrder) and order.bargin_algo:
+        if isinstance(order, LimitOrder) and order.bargainer:
             current_price_models = [
                 CurrentPriceModel(time=current_price.visible_time, ask_price=current_price.ask_price,
                                   ask_size=current_price.ask_size, bid_price=current_price.bid_price,
                                   bid_size=current_price.bid_size, price=current_price.price)
-                for current_price in order.bargin_algo.current_price_history]
+                for current_price in order.bargainer.current_price_history]
             price_change_models = [self._to_price_change_model(price_change)
-                                   for price_change in order.bargin_algo.price_change_history]
-            kwargs.update({"bargin": BarginModel(current_price_history=current_price_models,
-                                                 price_change_history=price_change_models,
-                                                 name=order.bargin_algo.name())})
-        for name in ['extended_time', 'order_status_callback', 'executions', 'bargin_algo']:
+                                   for price_change in order.bargainer.price_change_history]
+            kwargs.update({"bargainer": BargainerModel(current_price_history=current_price_models,
+                                                       price_change_history=price_change_models,
+                                                       algo_type=type(order.bargainer.algo).__name__)})
+        for name in ['extended_time', 'order_status_callback', 'executions']:
             kwargs.pop(name)
         order_model = UserOrderModel.create(**kwargs)
         order_model.save()
@@ -194,3 +200,31 @@ class OrderRepoImpl(OrderRepo):
                                                 ask_size=current_price.ask_size, bid_price=current_price.bid_price,
                                                 bid_size=current_price.bid_size, price=current_price.price)})
         return PriceChangeModel(**kwargs)
+
+    def build_bargainer(self, bargainer_model: BargainerModel):
+        # 反序列化后的bargainer不再需要具备议价的能力，所以构造函数的参数都为null
+        bargainer = Bargainer(None, None, None, None)
+        current_price_history: List[CurrentPrice] = []
+        price_change_history: List[PriceChange] = []
+        for pc_model in bargainer_model.price_change_history:
+            if isinstance(pc_model, PriceChangeModel):
+                pc = PriceChange(to_timestamp(pc_model.time), pc_model.pre_price, pc_model.after_price,
+                                 CurrentPrice(None, pc_model.current_price.time, None,
+                                              {"ask_price": pc_model.current_price.ask_price,
+                                               "ask_size": pc_model.current_price.ask_size,
+                                               "bid_price": pc_model.current_price.bid_price,
+                                               "bid_size": pc_model.current_price.bid_size,
+                                               "price": pc_model.current_price.price}))
+                price_change_history.append(pc)
+        for cp_model in bargainer_model.current_price_history:
+            if isinstance(cp_model, CurrentPriceModel):
+                cp = CurrentPrice(None, cp_model.time, None,
+                                  {"ask_price": cp_model.ask_price,
+                                   "ask_size": cp_model.ask_size,
+                                   "bid_price": cp_model.bid_price,
+                                   "bid_size": cp_model.bid_size,
+                                   "price": cp_model.price})
+                current_price_history.append(cp)
+        bargainer.current_price_history = current_price_history
+        bargainer.price_change_history = price_change_history
+        return bargainer
