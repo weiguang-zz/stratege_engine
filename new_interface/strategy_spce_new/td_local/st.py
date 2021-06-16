@@ -1,10 +1,6 @@
-from td.client import TDClient
-
-from se2 import TDAccount
 from se2.domain.account import *
 from se2.domain.engine import *
 from se2.domain.time_series import *
-import datetime
 
 
 class NewSPCEStrategy(AbstractStrategy):
@@ -18,33 +14,18 @@ class NewSPCEStrategy(AbstractStrategy):
         pass
 
     def do_initialize(self):
-        market_open = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketOpen())
+        market_open = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketOpen(minute_offset=-1375))
         market_close = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=0))
         ten_minute_after_market_open = EventDefinition(tp=EventDefinitionType.TIME,
                                                        time_rule=MarketOpen(minute_offset=10))
-        one_minute_before_market_open = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketOpen(minute_offset=-1))
         self.engine.register_event(market_open, self.market_open)
         self.engine.register_event(market_close, self.market_close)
         self.engine.register_event(ten_minute_after_market_open, self.ten_minute_after_market_open)
-        self.engine.register_event(one_minute_before_market_open, self.one_minute_before_market_open)
         # 初始化收盘价
-        self.initialize_price()
+        # self.initialize_price()
+        self.last_close = 100
 
-    @retry(limit=3)
-    def one_minute_before_market_open(self, event: Event):
-        if isinstance(self.account, TDAccount):
-            # 提前获取access token，防止开盘的时候获取token失败
-            client: TDClient = self.account.client
-            client.validate_token()
-            access_token_ts = datetime.datetime.fromtimestamp(client.state['access_token_expires_at'])
-            threshold = access_token_ts - datetime.timedelta(minutes=5)
-            if datetime.datetime.now().timestamp() > threshold:
-                raise RuntimeError("获取token失败")
-
-
-
-
-    @alarm(level=AlarmLevel.ERROR, target="开盘操作", escape_params=[EscapeParam(index=0, key='self')])
+    @alarm(level=AlarmLevel.ERROR, target="开盘回调", escape_params=[EscapeParam(index=0, key='self')])
     def market_open(self, event: Event):
         dest_position = 0
         current_position = 0

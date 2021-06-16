@@ -73,7 +73,11 @@ class TDAccount(AbstractAccount):
     def do_place_order(self, order: Order):
         td_order: Dict = self.change_to_td_order(order)
         # 如果下单失败，下面方法会抛异常
+        # 该方法内部，如果下单之前获取token失败，下单操作会触发重新获取token，但是该方法会返回None
         resp = self.client.place_order(self.account_id, td_order)
+        if not resp:
+            # 抛异常触发重试
+            raise RuntimeError("下单异常，可能是token过期导致的")
         td_order_id = resp.get('order_id')
         order.set_real_order_id(td_order_id)
 
@@ -216,12 +220,13 @@ class TDAccount(AbstractAccount):
             while True:
                 message_decoded = await stream_client.start_pipeline()
                 logging.info("receive message:{}".format(message_decoded))
-                for handler in self.stream_message_handlers:
-                    try:
-                        handler.process_message(message_decoded)
-                    except:
-                        import traceback
-                        logging.error("处理stream消息异常:{}".format(traceback.format_exc()))
+                if message_decoded:
+                    for handler in self.stream_message_handlers:
+                        try:
+                            handler.process_message(message_decoded)
+                        except:
+                            import traceback
+                            logging.error("处理stream消息异常:{}".format(traceback.format_exc()))
 
         threading.Thread(target=lambda: asyncio.run(do_sync()), name='sync_order_use_stream').start()
         # 等待3秒以完成stream初始化

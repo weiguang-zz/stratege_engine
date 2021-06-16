@@ -2,6 +2,7 @@
 from __future__ import annotations
 import logging
 import threading
+import time
 from configparser import ConfigParser
 from email.header import Header
 from email.mime.text import MIMEText
@@ -228,6 +229,7 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
             params_after = None
             exception = None
             ret_obj = None
+            start_time = time.time()
             try:
                 ret_obj = func(*args, **kwargs)
                 new_kwargs = kwargs.copy()
@@ -238,7 +240,7 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
                 is_exception = True
 
             log_dict = {'params_before': params_before, 'params_after': params_after,
-                        "ret_obj": ret_obj, 'has_exception': is_exception}
+                        "ret_obj": ret_obj, 'has_exception': is_exception, 'rt': time.time()-start_time}
             name = target_name if target_name else func.__name__
             if is_exception:
                 logging.error("{}:{}".format(name, log_dict))

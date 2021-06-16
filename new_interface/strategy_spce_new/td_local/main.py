@@ -3,7 +3,7 @@ from trading_calendars import get_calendar
 from se2.domain.engine import *
 from se2.domain.account import *
 from se2.domain.time_series import *
-from new_interface.strategy_spce_new.st import NewSPCEStrategy
+from new_interface.strategy_spce_new.td_local.st import NewSPCEStrategy
 from se2.infras.td import *
 from se2.infras.ib2 import *
 from se2 import config
