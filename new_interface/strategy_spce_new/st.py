@@ -21,6 +21,8 @@ class NewSPCEStrategy(AbstractStrategy):
         self.engine.register_event(market_open, self.market_open)
         self.engine.register_event(market_close, self.market_close)
         self.engine.register_event(ten_minute_after_market_open, self.ten_minute_after_market_open)
+        # 初始化收盘价
+        self.initialize_price()
 
     @alarm(level=AlarmLevel.ERROR, target="开盘回调", escape_params=[EscapeParam(index=0, key='self')])
     def market_open(self, event: Event):
@@ -98,7 +100,6 @@ class NewSPCEStrategy(AbstractStrategy):
             raise RuntimeError("not supported")
         self.last_close = None
         self.code = 'SPCE_STK_USD_SMART'
-        self.initialize_price()
 
     def initialize_price(self):
         command = HistoryDataQueryCommand(None, None, [self.code], window=1)
