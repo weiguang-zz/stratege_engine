@@ -1,0 +1,1 @@
+nohup env PYTHONPATH=/Users/zhangzheng/Quantitative/stratege_engine  python main.py > service.out 2>&1 &
