@@ -291,7 +291,8 @@ class StopOrder(Order):
 class Bargainer(object):
 
     def __init__(self, account: AbstractAccount, current_price_ts: TimeSeries, freq: int,
-                 algo: BargainAlgo, time_out_threshold: Timestamp = None):
+                 algo: BargainAlgo, time_out_threshold: Timestamp = None,
+                 max_deviation_percentage: float = None):
         """
         :param account: 账户
         :param current_price_ts: 实时价格的时间序列
@@ -306,6 +307,10 @@ class Bargainer(object):
         self.current_price_history: List[CurrentPrice] = []
         self.price_change_history: List[PriceChange] = []
         self.time_out_threshold = time_out_threshold
+        self.max_deviation_percentage = max_deviation_percentage
+        if time_out_threshold:
+            if time_out_threshold.tzname() != 'CST':
+                raise RuntimeError("时区需要是CST")
 
     def bind_order(self, order: LimitOrder):
         self.order = order
@@ -328,6 +333,7 @@ class Bargainer(object):
                             # 由于订单执行详情是在异步的线程中更新的，所以这个时候订单可能已经成交的
                             # 在任何跟订单状态有关系的操作之前，都进行这个判断是合理的
                             if self.order.status != OrderStatus.FILLED:
+                                price_change.after_price = self.revise_price_if_needed(price_change.after_price)
                                 self.account.update_order_price(self.order, price_change.after_price)
                                 self.price_change_history.append(price_change)
                                 self.latest_price = price_change.after_price
@@ -345,8 +351,30 @@ class Bargainer(object):
     def get_initial_price(self):
         cp = self.current_price_ts.current_price([self.order.code])[self.order.code]
         price: float = self.algo.get_initial_price(cp, self)
+        price = self.revise_price_if_needed(price)
         self.price_change_history.append(PriceChange(cp.visible_time, -1, price, cp))
         return price
+
+    def revise_price_if_needed(self, new_price) -> float:
+        """
+        通过跟订单的理想价格相比较，校验出价是否超出了可接受的偏差。 并且将价格的小数位限制为2位
+        """
+        if self.order.direction == OrderDirection.BUY:
+            price_limit = self.order.ideal_price * (1 + self.max_deviation_percentage)
+            if new_price > price_limit:
+                logging.info("要设置的价格超过了最大的允许偏差，将设置价格为临界值:" + str(price_limit))
+                return round(price_limit, 2)
+            else:
+                return round(new_price, 2)
+        elif self.order.direction == OrderDirection.SELL:
+            price_limit = self.order.ideal_price * (1 - self.max_deviation_percentage)
+            if new_price < price_limit:
+                logging.info("要设置的价格超过了最大的允许偏差，将设置价格为临界值:" + str(price_limit))
+                return round(price_limit, 2)
+            else:
+                return round(new_price, 2)
+        else:
+            raise RuntimeError("wrong order direction")
 
     def last_price(self) -> float:
         """
@@ -359,7 +387,7 @@ class Bargainer(object):
 class BargainAlgo(metaclass=ABCMeta):
 
     @abstractmethod
-    def get_initial_price(self, cp:CurrentPrice, bargainer: Bargainer) -> float:
+    def get_initial_price(self, cp: CurrentPrice, bargainer: Bargainer) -> float:
         pass
 
     @abstractmethod

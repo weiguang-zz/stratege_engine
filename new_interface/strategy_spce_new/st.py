@@ -30,6 +30,7 @@ class NewSPCEStrategy(AbstractStrategy):
         # 初始化收盘价
         self.initialize_price()
 
+    @alarm(level=AlarmLevel.ERROR, target="盘前刷新token", escape_params=[EscapeParam(index=0, key='self')])
     @retry(limit=3)
     def one_minute_before_market_open(self, event: Event):
         if isinstance(self.account, TDAccount):
@@ -38,10 +39,8 @@ class NewSPCEStrategy(AbstractStrategy):
             client.validate_token()
             access_token_ts = datetime.datetime.fromtimestamp(client.state['access_token_expires_at'])
             threshold = access_token_ts - datetime.timedelta(minutes=5)
-            if datetime.datetime.now().timestamp() > threshold:
+            if datetime.datetime.now().timestamp() > threshold.timestamp():
                 raise RuntimeError("获取token失败")
-
-
 
 
     @alarm(level=AlarmLevel.ERROR, target="开盘操作", escape_params=[EscapeParam(index=0, key='self')])
@@ -80,7 +79,10 @@ class NewSPCEStrategy(AbstractStrategy):
             reason = "时间:{}, 当前持仓:{}, 总市值：{}, 目标持仓:{}, 昨日收盘价:{}, 今日最新价格:{}" \
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_close,
                         current_price.__dict__)
-            bargainer = Bargainer(self.account, self.data_portal.current_price_ts, 5, MidPriceBargainer())
+            timeout_threshold = Timestamp.now(tz='Asia/Shanghai') + Timedelta(minutes=1)
+            bargainer = Bargainer(self.account, self.data_portal.current_price_ts, 5, MidPriceBargainer(),
+                                  time_out_threshold=timeout_threshold,
+                                  max_deviation_percentage=0.01)
             order: Order = LimitOrder(self.code, direction, abs(change), Timestamp.now(tz='Asia/Shanghai'),
                                       reason, current_price.price, None, bargainer=bargainer)
             self.account.place_order(order)
