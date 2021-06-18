@@ -531,6 +531,7 @@ class AbstractAccount(metaclass=ABCMeta):
         pass
 
     @do_log(target_name="订单成交", escape_params=[EscapeParam(index=0, key='self')])
+    @alarm(target='订单成交', escape_params=[EscapeParam(index=0, key='self')])
     def order_filled(self, order: Order, executions: List[Execution], replaced=False):
         pre_cash_cost = order.cash_cost()
         pre_position = order.filled_quantity if order.direction == OrderDirection.BUY else -order.filled_quantity

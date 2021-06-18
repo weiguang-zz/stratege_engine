@@ -22,7 +22,8 @@ class NewSPCEStrategy(AbstractStrategy):
         market_close = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=0))
         ten_minute_after_market_open = EventDefinition(tp=EventDefinitionType.TIME,
                                                        time_rule=MarketOpen(minute_offset=10))
-        one_minute_before_market_open = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketOpen(minute_offset=-1))
+        one_minute_before_market_open = EventDefinition(tp=EventDefinitionType.TIME,
+                                                        time_rule=MarketOpen(minute_offset=-1))
         self.engine.register_event(market_open, self.market_open)
         self.engine.register_event(market_close, self.market_close)
         self.engine.register_event(ten_minute_after_market_open, self.ten_minute_after_market_open)
@@ -34,14 +35,13 @@ class NewSPCEStrategy(AbstractStrategy):
     @retry(limit=3)
     def one_minute_before_market_open(self, event: Event):
         if isinstance(self.account, TDAccount):
-            # 提前获取access token，防止开盘的时候获取token失败
+            # 提前获取access token，防止开盘的时候获取token失败。
+            # 该方法的另一个作用是用于预热http连接池，因为获取token的操作能够创建一个tcp连接，这个连接可以被用于开盘时候的下单操作
             client: TDClient = self.account.client
-            client.validate_token()
-            access_token_ts = datetime.datetime.fromtimestamp(client.state['access_token_expires_at'])
-            threshold = access_token_ts - datetime.timedelta(minutes=5)
-            if datetime.datetime.now().timestamp() > threshold.timestamp():
-                raise RuntimeError("获取token失败")
-
+            try:
+                client.validate_token()
+            except Exception as e:
+                raise RetryError(e)
 
     @alarm(level=AlarmLevel.ERROR, target="开盘操作", escape_params=[EscapeParam(index=0, key='self')])
     def market_open(self, event: Event):

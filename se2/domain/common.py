@@ -58,7 +58,6 @@ def synchronized(func):
 
 
 def send_email(title: str, content: str):
-
     if not email_alarm_config or not email_alarm_config.is_activate:
         return
 
@@ -169,7 +168,7 @@ def build_params_str(*args, **kwargs):
 
 def alarm(level: AlarmLevel = AlarmLevel.NORMAL, target: str = None, freq: Timedelta = None,
           escape_params: List[EscapeParam] = None):
-    last_alarm_time: Mapping[str, Timestamp] = {}
+    last_alarm_time: Dict[str, Timestamp] = {}
 
     def wrapper(func: Callable):
         def inner_wrapper(*args, **kwargs):
@@ -240,7 +239,7 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
                 is_exception = True
 
             log_dict = {'params_before': params_before, 'params_after': params_after,
-                        "ret_obj": ret_obj, 'has_exception': is_exception, 'rt': time.time()-start_time}
+                        "ret_obj": ret_obj, 'has_exception': is_exception, 'rt': time.time() - start_time}
             name = target_name if target_name else func.__name__
             if is_exception:
                 logging.error("{}:{}".format(name, log_dict))
@@ -257,6 +256,10 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
     return wrapper
 
 
+class RetryError(Exception):
+    pass
+
+
 def retry(limit=3, interval: int = 0):
     if limit <= 1 or interval < 0:
         raise RuntimeError('wrong retry parameters')
@@ -270,7 +273,7 @@ def retry(limit=3, interval: int = 0):
                         logging.info("方法:{}第{}次重试".format(func.__name__, k))
                     ret = func(*args, **kwargs)
                     return ret
-                except RuntimeError as e:
+                except RetryError as e:
                     exception = e
                     if interval > 0:
                         import time

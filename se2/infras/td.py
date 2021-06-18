@@ -1,5 +1,7 @@
 import asyncio
 import time
+
+from requests import RequestException
 from td.client import TDClient
 from td.stream import TDStreamerClient
 from se2.domain.account import *
@@ -74,10 +76,15 @@ class TDAccount(AbstractAccount):
         td_order: Dict = self.change_to_td_order(order)
         # 如果下单失败，下面方法会抛异常
         # 该方法内部，如果下单之前获取token失败，下单操作会触发重新获取token，但是该方法会返回None
-        resp = self.client.place_order(self.account_id, td_order)
+        try:
+            resp = self.client.place_order(self.account_id, td_order, timeout=(3, 3))
+        except RequestException as e:
+            # 通过抛出RetryError异常来让方法重试
+            raise RetryError(e)
+
         if not resp:
             # 抛异常触发重试
-            raise RuntimeError("下单异常，可能是token过期导致的")
+            raise RetryError("下单异常，可能是token过期导致的")
         td_order_id = resp.get('order_id')
         order.set_real_order_id(td_order_id)
 
@@ -88,7 +95,11 @@ class TDAccount(AbstractAccount):
         if order.status == OrderStatus.CANCELED:
             return
         # 如果订单已成交，下面方法不会抛异常
-        self.client.cancel_order(self.account_id, order.real_order_id)
+        try:
+            self.client.cancel_order(self.account_id, order.real_order_id, timeout=(3, 3))
+        except RequestException as e:
+            # 通过抛出RetryError异常来让方法重试
+            raise RetryError(e)
 
     def do_update_order_price(self, order, new_price):
         """
@@ -122,7 +133,7 @@ class TDAccount(AbstractAccount):
             symbol_type = cc[1]
             if symbol_type != 'STK':
                 raise NotImplementedError
-            res = self.client.search_instruments(symbol, "symbol-search")
+            res = self.client.search_instruments(symbol, "symbol-search", timeout=(3, 3))
             if not res or len(res) <= 0 or symbol not in res:
                 raise RuntimeError("没有查询到资产,code:" + code)
             if res[symbol]['assetType'] != 'EQUITY':
@@ -302,7 +313,7 @@ class HeartbeatMessageHandler(AbstractMessageHandler):
     二是heartbeat消息的延迟，每一条heartbeat消息上有带上时间戳，拿这个时间戳跟当前时间进行比较
     """
 
-    def __init__(self, allow_delay=Timedelta(seconds=3), check_period=Timedelta(seconds=20)):
+    def __init__(self, allow_delay=Timedelta(seconds=10), check_period=Timedelta(seconds=20)):
         self.last_heart_beat_time = None
         self.allow_delay = allow_delay
         self.check_period = check_period
