@@ -93,7 +93,7 @@ class Order(metaclass=ABCMeta):
                 self.order_status_callback.order_status_change(self)
 
     def failed(self, reason):
-        if self.status == OrderStatus.CREATED:
+        if self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED]:
             self.failed_reason = reason
             self.status = OrderStatus.FAILED
             if self.order_status_callback:
@@ -332,7 +332,7 @@ class Bargainer(object):
                         if price_change:
                             # 由于订单执行详情是在异步的线程中更新的，所以这个时候订单可能已经成交的
                             # 在任何跟订单状态有关系的操作之前，都进行这个判断是合理的
-                            if self.order.status != OrderStatus.FILLED:
+                            if self.order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
                                 price_change.after_price = self.revise_price_if_needed(price_change.after_price)
                                 self.account.update_order_price(self.order, price_change.after_price)
                                 self.price_change_history.append(price_change)
@@ -395,7 +395,8 @@ class BargainAlgo(metaclass=ABCMeta):
         pass
 
     def timeout(self, cp: CurrentPrice, bargainer: Bargainer):
-        bargainer.account.cancel_order(bargainer.order, "议价超时")
+        if bargainer.order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
+            bargainer.account.cancel_order(bargainer.order, "议价超时")
 
 
 class DefaultBargainAlgo(BargainAlgo):

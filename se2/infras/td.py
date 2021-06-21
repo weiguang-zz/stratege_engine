@@ -1,10 +1,12 @@
 import asyncio
+import threading
 import time
 
 from requests import RequestException
 from td.client import TDClient
 from td.stream import TDStreamerClient
 from se2.domain.account import *
+from se2.domain.common import *
 import xml.etree.ElementTree as ET
 
 client: TDClient = None
@@ -34,8 +36,10 @@ class TDAccount(AbstractAccount):
         self.stream_message_handlers: List[AbstractMessageHandler] = [
             HeartbeatMessageHandler(),
             ResponseMessageHandler(),
-            OrderFilledMessageHandler(self)
+            OrderFilledMessageHandler(self),
+            OrderRejectMessageHandler(self)
         ]
+        self.stream_client: TDStreamerClient = self.client.create_streaming_session()
         self.start_sync_order_execution_use_stream()
         # self.start_sync_order_execution_thread()
 
@@ -85,6 +89,12 @@ class TDAccount(AbstractAccount):
         if not resp:
             # 抛异常触发重试
             raise RetryError("下单异常，可能是token过期导致的")
+        # 由于订单拒绝消息是通过streamer异步推送过来的，所以这里尝试等待1s
+        for i in range(4):
+            time.sleep(0.25)
+            if order.status == OrderStatus.FAILED:
+                raise RuntimeError("下单失败，原因:{}".format(order.failed_reason))
+
         td_order_id = resp.get('order_id')
         order.set_real_order_id(td_order_id)
 
@@ -94,12 +104,17 @@ class TDAccount(AbstractAccount):
             raise RuntimeError("没有td订单号")
         if order.status == OrderStatus.CANCELED:
             return
-        # 如果订单已成交，下面方法不会抛异常
-        try:
-            self.client.cancel_order(self.account_id, order.real_order_id, timeout=(3, 3))
-        except RequestException as e:
-            # 通过抛出RetryError异常来让方法重试
-            raise RetryError(e)
+        # 由于对于td来说， failed、partial_filled、filled的状态的变更都是在异步的线程中进行的
+        # 所以取消订单的时候，订单可能已经成交，也可能已经失败。
+        # 由于是异步的，所以本地订单状态跟服务器的订单状态就可能不一致，而所有的操作都是根据本地的订单状态来进行的。
+        # 且服务器没有对动作进行状态检验，比如已成功和已失败的订单，取消操作都收成功的。
+        # 所以针对取消订单的逻辑，我们只针对本地的订单状态进行尝试取消，而不保证操作结果
+        if order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
+            try:
+                self.client.cancel_order(self.account_id, order.real_order_id, timeout=(3, 3))
+            except RequestException as e:
+                # 通过抛出RetryError异常来让方法重试
+                raise RetryError(e)
 
     def do_update_order_price(self, order, new_price):
         """
@@ -110,13 +125,13 @@ class TDAccount(AbstractAccount):
         """
         if not order.real_order_id:
             raise RuntimeError("没有td订单号")
-        if order.status != OrderStatus.FILLED:
-            # 如果订单已经成交，取消操作也不会报错
-            self.do_cancel_order(order)
-        # 因为监听订单成交详情是在独立的线程中，所以在任何操作之前，订单状态都有可能变成成交的状态
+
+        # 下面的操作只是尝试去取消，但是订单状态不一定是取消的
+        self.do_cancel_order(order)
+        # 因为监听订单成交详情是在独立的线程中，所以在任何操作之前，实际的订单状态都有可能变成失败或者成交状态。
         # 即使在下面做了判断，还是可能因为延迟导致服务端其实已经成交，但是因为延迟没有感知到，这种
         # 情况可能会导致下了过量的订单。这种没有被及时感知到的成交详情可以通过告警发出来，以便及时干预
-        if order.status != OrderStatus.FILLED:
+        if order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
             new_order = LimitOrder(order.code, order.direction, order.quantity - order.filled_quantity,
                                    Timestamp.now(tz='Asia/Shanghai'), "更新订单", order.ideal_price,
                                    new_price)
@@ -222,14 +237,13 @@ class TDAccount(AbstractAccount):
         threading.Thread(target=do_sync, name="sync td orders").start()
 
     def start_sync_order_execution_use_stream(self):
-        stream_client: TDStreamerClient = self.client.create_streaming_session()
-        stream_client.account_activity()
+        self.stream_client.account_activity()
 
         # Build the Pipeline.
         async def do_sync():
-            await stream_client.build_pipeline()
+            await self.stream_client.build_pipeline()
             while True:
-                message_decoded = await stream_client.start_pipeline()
+                message_decoded = await self.stream_client.start_pipeline()
                 logging.info("receive message:{}".format(message_decoded))
                 if message_decoded:
                     for handler in self.stream_message_handlers:
@@ -238,6 +252,15 @@ class TDAccount(AbstractAccount):
                         except:
                             import traceback
                             logging.error("处理stream消息异常:{}".format(traceback.format_exc()))
+                else:
+                    # 如果消息为None，可能是connection close导致的，所以尝试重新连接
+                    try:
+                        await self.stream_client.build_pipeline()
+                    except:
+                        import traceback
+                        do_alarm('process stream msg', AlarmLevel.ERROR, None, None,
+                                 '{}'.format(traceback.format_exc()))
+                        break
 
         threading.Thread(target=lambda: asyncio.run(do_sync()), name='sync_order_use_stream').start()
         # 等待3秒以完成stream初始化
@@ -293,6 +316,41 @@ class OrderFilledMessageHandler(AbstractMessageHandler):
                         exec_id = exec_element.find("{urn:xmlns:beb.ameritrade.com}ID").text
                         e = Execution(exec_id, 0, quantity, price, t, 0, order_id)
                         self.account.order_filled(order, [e])
+
+
+class OrderRejectMessageHandler(AbstractMessageHandler):
+
+    def __init__(self, account: TDAccount):
+        self.account: TDAccount = account
+
+    @alarm(level=AlarmLevel.ERROR, target='处理订单拒绝消息', escape_params=[EscapeParam(index=0, key='self')])
+    def process_message(self, message: Dict):
+        if 'data' not in message:
+            return
+        for single_msg in message['data']:
+            if single_msg['service'] != 'ACCT_ACTIVITY':
+                continue
+            for single_content in single_msg['content']:
+                if single_content['1'] != self.account.account_id or single_content['2'] not in ['OrderRejection']:
+                    continue
+                # 解析执行详情
+                root: ET.Element = ET.fromstring(single_content['3'])
+                order_id = root.find('{urn:xmlns:beb.ameritrade.com}Order/{urn:xmlns:beb.ameritrade.com}OrderKey').text
+                order: Order = self.account.get_order_by_real_order_id(order_id)
+                if not order:
+                    logging.warning("订单:{}不是该账户发出的，拒绝详情将会忽略".format(order_id))
+                    # 显示告警，因为这种不正常成交详情可能是因为客户端没有及时感知到，从而导致了错误的操作
+                    do_alarm('未预期到的订单拒绝详情', AlarmLevel.ERROR, None, None, '{}'.format(message))
+                else:
+                    if order.status not in [OrderStatus.CREATED, OrderStatus.SUBMITTED]:
+                        logging.warning("订单:{}的状态不对，拒绝详情将会忽略".format(order.__dict__))
+                        do_alarm('订单的状态:{}不对，拒绝详情将会忽略'.format(order.status), AlarmLevel.ERROR, None, None,
+                                 '{}'.format(message))
+                    else:
+                        # 处理
+                        reject_reason_element = root.find("{urn:xmlns:beb.ameritrade.com}RejectReason")
+                        reject_reason = reject_reason_element.text
+                        order.failed(reject_reason)
 
 
 class ResponseMessageHandler(AbstractMessageHandler):
