@@ -239,9 +239,12 @@ class TDAccount(AbstractAccount):
     def start_sync_order_execution_use_stream(self):
         self.stream_client.account_activity()
 
-        # Build the Pipeline.
-        async def do_sync():
+        @alarm(level=AlarmLevel.NORMAL, target="建立Streamer连接", freq=Timedelta(minutes=10))
+        async def connect():
             await self.stream_client.build_pipeline()
+
+        async def do_sync():
+            await connect()
             while True:
                 message_decoded = await self.stream_client.start_pipeline()
                 logging.info("receive message:{}".format(message_decoded))
@@ -254,13 +257,7 @@ class TDAccount(AbstractAccount):
                             logging.error("处理stream消息异常:{}".format(traceback.format_exc()))
                 else:
                     # 如果消息为None，可能是connection close导致的，所以尝试重新连接
-                    try:
-                        await self.stream_client.build_pipeline()
-                    except:
-                        import traceback
-                        do_alarm('process stream msg', AlarmLevel.ERROR, None, None,
-                                 '{}'.format(traceback.format_exc()))
-                        break
+                    await connect()
 
         threading.Thread(target=lambda: asyncio.run(do_sync()), name='sync_order_use_stream').start()
         # 等待3秒以完成stream初始化
