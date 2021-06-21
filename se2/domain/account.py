@@ -93,6 +93,8 @@ class Order(metaclass=ABCMeta):
                 self.order_status_callback.order_status_change(self)
 
     def failed(self, reason):
+        if self.status == OrderStatus.FAILED:
+            return
         if self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED]:
             self.failed_reason = reason
             self.status = OrderStatus.FAILED
@@ -292,7 +294,7 @@ class Bargainer(object):
 
     def __init__(self, account: AbstractAccount, current_price_ts: TimeSeries, freq: int,
                  algo: BargainAlgo, time_out_threshold: Timestamp = None,
-                 max_deviation_percentage: float = None):
+                 max_deviation_percentage: float = 0.01):
         """
         :param account: 账户
         :param current_price_ts: 实时价格的时间序列
@@ -472,9 +474,15 @@ class AbstractAccount(metaclass=ABCMeta):
         try:
             order.with_status_callback(self.order_status_callback).with_account(self.name)
             self.do_place_order(order)
-            order.submitted()
             self.new_placed_orders.append(order)
             self.real_order_id_to_order[order.real_order_id] = order
+
+            # 由于订单拒绝消息是通过streamer异步推送过来的，所以这里尝试等待1s
+            for i in range(4):
+                time.sleep(0.25)
+                if order.status == OrderStatus.FAILED:
+                    raise RuntimeError("下单失败，原因:{}".format(order.failed_reason))
+            order.submitted()
             if isinstance(order, LimitOrder) and order.bargainer:
                 order.bargainer.start_bargin()
 

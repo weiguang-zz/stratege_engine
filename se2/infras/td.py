@@ -89,11 +89,6 @@ class TDAccount(AbstractAccount):
         if not resp:
             # 抛异常触发重试
             raise RetryError("下单异常，可能是token过期导致的")
-        # 由于订单拒绝消息是通过streamer异步推送过来的，所以这里尝试等待1s
-        for i in range(4):
-            time.sleep(0.25)
-            if order.status == OrderStatus.FAILED:
-                raise RuntimeError("下单失败，原因:{}".format(order.failed_reason))
 
         td_order_id = resp.get('order_id')
         order.set_real_order_id(td_order_id)
@@ -334,6 +329,10 @@ class OrderRejectMessageHandler(AbstractMessageHandler):
                 root: ET.Element = ET.fromstring(single_content['3'])
                 order_id = root.find('{urn:xmlns:beb.ameritrade.com}Order/{urn:xmlns:beb.ameritrade.com}OrderKey').text
                 order: Order = self.account.get_order_by_real_order_id(order_id)
+                if not order:
+                    # 拒绝消息可能先于下单响应返回，所以这个时候在内存中是找不到这个映射的，尝试等待300ms
+                    time.sleep(0.3)
+                    order: Order = self.account.get_order_by_real_order_id(order_id)
                 if not order:
                     logging.warning("订单:{}不是该账户发出的，拒绝详情将会忽略".format(order_id))
                     # 显示告警，因为这种不正常成交详情可能是因为客户端没有及时感知到，从而导致了错误的操作
