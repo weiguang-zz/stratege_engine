@@ -308,7 +308,7 @@ class OrderFilledMessageHandler(AbstractMessageHandler):
                     # 显示告警，因为这种不正常成交详情可能是因为客户端没有及时感知到，从而导致了错误的操作
                     do_alarm('未预期到的成交详情', AlarmLevel.ERROR, None, None, '{}'.format(message))
                 else:
-                    if order.status not in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
+                    if order.status not in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED, OrderStatus.CREATED]:
                         logging.warning("订单:{}的状态不对，成交详情将会忽略".format(order.__dict__))
                         do_alarm('未预期到的成交详情，订单已到终态', AlarmLevel.ERROR, None, None, '{}'.format(message))
                     else:
