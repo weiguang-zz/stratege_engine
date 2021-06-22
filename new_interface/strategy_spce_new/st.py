@@ -82,7 +82,7 @@ class NewSPCEStrategy(AbstractStrategy):
                 .format(event.visible_time, current_position, net_value, dest_position, self.last_close,
                         current_price.__dict__)
             timeout_threshold = Timestamp.now(tz='Asia/Shanghai') + Timedelta(minutes=1)
-            bargainer = Bargainer(self.account, self.data_portal.current_price_ts, 5, MidPriceBargainer(),
+            bargainer = Bargainer(self.account, self.data_portal.current_price_ts, 10, MidPriceBargainer(),
                                   time_out_threshold=timeout_threshold,
                                   max_deviation_percentage=0.01)
             order: Order = LimitOrder(self.code, direction, abs(change), Timestamp.now(tz='Asia/Shanghai'),

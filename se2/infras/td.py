@@ -114,6 +114,8 @@ class TDAccount(AbstractAccount):
     def do_update_order_price(self, order, new_price):
         """
         对于td来说，取消订单等价于取消原来的订单，然后重新下一个订单。但是在框架层面仍然要维持同一个订单
+        如果订单已经成交或者订单已经失败的情况下，该操作会报错， 如果订单是部分成交的状态，但是没有被
+        感知的情况下，该操作可能会导致重复订单的产生
         :param new_price:
         :param order:
         :return:
@@ -121,20 +123,31 @@ class TDAccount(AbstractAccount):
         if not order.real_order_id:
             raise RuntimeError("没有td订单号")
 
-        # 下面的操作只是尝试去取消，但是订单状态不一定是取消的
-        self.do_cancel_order(order)
-        # 因为监听订单成交详情是在独立的线程中，所以在任何操作之前，实际的订单状态都有可能变成失败或者成交状态。
-        # 即使在下面做了判断，还是可能因为延迟导致服务端其实已经成交，但是因为延迟没有感知到，这种
-        # 情况可能会导致下了过量的订单。这种没有被及时感知到的成交详情可以通过告警发出来，以便及时干预
         if order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
             new_order = LimitOrder(order.code, order.direction, order.quantity - order.filled_quantity,
                                    Timestamp.now(tz='Asia/Shanghai'), "更新订单", order.ideal_price,
                                    new_price)
-            self.do_place_order(new_order)
-            # 更新real_order_id到order的映射
+            new_td_order = self.change_to_td_order(new_order)
+            resp = self.client.modify_order(self.account_id, new_td_order, order.real_order_id)
+            new_td_order_id = resp.get('order_id')
             self.real_order_id_to_order.pop(order.real_order_id)
-            order.set_real_order_id(new_order.real_order_id)
-            self.real_order_id_to_order[new_order.real_order_id] = order
+            order.set_real_order_id(new_td_order_id)
+            self.real_order_id_to_order[new_td_order_id] = order
+
+        # # 下面的操作只是尝试去取消，但是订单状态不一定是取消的
+        # self.do_cancel_order(order)
+        # # 因为监听订单成交详情是在独立的线程中，所以在任何操作之前，实际的订单状态都有可能变成失败或者成交状态。
+        # # 即使在下面做了判断，还是可能因为延迟导致服务端其实已经成交，但是因为延迟没有感知到，这种
+        # # 情况可能会导致下了过量的订单。这种没有被及时感知到的成交详情可以通过告警发出来，以便及时干预
+        # if order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
+        #     new_order = LimitOrder(order.code, order.direction, order.quantity - order.filled_quantity,
+        #                            Timestamp.now(tz='Asia/Shanghai'), "更新订单", order.ideal_price,
+        #                            new_price)
+        #     self.do_place_order(new_order)
+        #     # 更新real_order_id到order的映射
+        #     self.real_order_id_to_order.pop(order.real_order_id)
+        #     order.set_real_order_id(new_order.real_order_id)
+        #     self.real_order_id_to_order[new_order.real_order_id] = order
 
     def valid_scope(self, codes):
         for code in codes:
