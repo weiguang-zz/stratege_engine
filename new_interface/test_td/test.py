@@ -48,10 +48,29 @@ now = Timestamp.now(tz='Asia/Shanghai')
 
 # threading.Thread(target=lambda: asyncio.run(process()), name='process data').start()
 
-# time.sleep(5)
+# time.sleep(20)
+
+# res = acc.client.get_user_principals(fields=['streamerConnectionInfo','streamerSubscriptionKeys','preferences','surrogateIds'])
+# for i in range(10):
+#     acc.stream_client.account_activity()
+#     time.sleep(1)
+
+# time.sleep(1200)
+
 order: Order = LimitOrder("SPCE_STK_USD_SMART", OrderDirection.BUY, 2, now, "test", 33, 33)
-order.extended_time = True
-acc.place_order(order)
+# order.extended_time = True
+# acc.place_order(order)
+#
+# o = acc.client.get_orders("635212926", order.real_order_id)
+
+
+# res = acc.client.get_orders("635212926", "4548854101")
+
+td_order = acc.change_to_td_order(order)
+
+# res = acc.client.modify_order("635212926", td_order, "4548854101")
+
+res = acc.client.cancel_order("635212926", "4548854101")
 
 # stream_session.stream()
 print("done....")

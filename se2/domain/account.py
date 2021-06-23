@@ -482,6 +482,9 @@ class AbstractAccount(metaclass=ABCMeta):
                 time.sleep(0.25)
                 if order.status == OrderStatus.FAILED:
                     raise RuntimeError("下单失败，原因:{}".format(order.failed_reason))
+                # 如果是市价单的话，订单很可能已经成交了
+                if order.status == OrderStatus.FILLED:
+                    return
             order.submitted()
             if isinstance(order, LimitOrder) and order.bargainer:
                 order.bargainer.start_bargin()
