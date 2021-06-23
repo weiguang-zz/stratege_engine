@@ -42,8 +42,6 @@ class NewSPCEStrategy(AbstractStrategy):
                 client.validate_token()
             except Exception as e:
                 raise RetryError(e)
-            # 在实践中发现，有些时候，账户的一些事件没有被客户端感知到，所以每天开盘的时候重新订阅下账户事件
-            self.account.stream_client.account_activity()
 
     @alarm(level=AlarmLevel.ERROR, target="开盘操作", escape_params=[EscapeParam(index=0, key='self')])
     def market_open(self, event: Event):

@@ -1,13 +1,13 @@
 import asyncio
-import threading
-import time
+import xml.etree.ElementTree as ET
 
 from requests import RequestException
 from td.client import TDClient
 from td.stream import TDStreamerClient
+from websockets.protocol import State
+
 from se2.domain.account import *
 from se2.domain.common import *
-import xml.etree.ElementTree as ET
 
 client: TDClient = None
 
@@ -244,15 +244,21 @@ class TDAccount(AbstractAccount):
 
         threading.Thread(target=do_sync, name="sync td orders").start()
 
+    async def streamer_re_connected(self):
+        """
+        当streamer的connection断开后，可以调用这个方法来重连， 重连后之前保存过的requests都会重新订阅
+        """
+        if self.stream_client.connection and self.stream_client.connection.state \
+                and self.stream_client.connection.state == State.OPEN:
+            logging.info("streamer 断开连接")
+            await self.stream_client.connection.close()
+        await self.stream_client.build_pipeline()
+
     def start_sync_order_execution_use_stream(self):
         self.stream_client.account_activity()
 
-        @alarm(level=AlarmLevel.NORMAL, target="建立Streamer连接", freq=Timedelta(minutes=10))
-        async def connect():
-            await self.stream_client.build_pipeline()
-
         async def do_sync():
-            await connect()
+            await self.stream_client.build_pipeline()
             while True:
                 message_decoded = await self.stream_client.start_pipeline()
                 logging.info("receive message:{}".format(message_decoded))
@@ -265,7 +271,19 @@ class TDAccount(AbstractAccount):
                             logging.error("处理stream消息异常:{}".format(traceback.format_exc()))
                 else:
                     # 如果消息为None，可能是connection close导致的，所以尝试重新连接
-                    await connect()
+                    while True:
+                        try:
+                            await self.streamer_re_connected()
+                            logging.info(" streamer重新连接成功")
+                            do_alarm("streamer重新连接成功", AlarmLevel.NORMAL, None, None, None)
+                            break
+                        except:
+                            import traceback
+                            err_msg = "stream重新连接异常:{}".format(traceback.format_exc())
+                            do_alarm("stream重新连接异常", AlarmLevel.ERROR, None, None, err_msg)
+                            logging.error(err_msg)
+                            # 十秒后重试
+                            time.sleep(10)
 
         threading.Thread(target=lambda: asyncio.run(do_sync()), name='sync_order_use_stream').start()
         # 等待3秒以完成stream初始化
@@ -411,3 +429,4 @@ class HeartbeatMessageHandler(AbstractMessageHandler):
         now = Timestamp.now(tz='Asia/Shanghai')
         if (now - server_time) > self.allow_delay:
             raise RuntimeError("心跳消息延迟太高，消息时间:{},当前时间:{}".format(server_time, now))
+        self.last_heart_beat_time = now
