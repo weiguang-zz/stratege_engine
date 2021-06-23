@@ -271,6 +271,8 @@ class TDAccount(AbstractAccount):
                             logging.error("处理stream消息异常:{}".format(traceback.format_exc()))
                 else:
                     # 如果消息为None，可能是connection close导致的，所以尝试重新连接
+                    alarm_interval = Timedelta(minutes=10)
+                    last_alarm_time = None
                     while True:
                         try:
                             await self.streamer_re_connected()
@@ -280,8 +282,10 @@ class TDAccount(AbstractAccount):
                         except:
                             import traceback
                             err_msg = "stream重新连接异常:{}".format(traceback.format_exc())
-                            do_alarm("stream重新连接异常", AlarmLevel.ERROR, None, None, err_msg)
                             logging.error(err_msg)
+                            if last_alarm_time and (Timestamp.now(tz='Asia/Shanghai') - last_alarm_time) > alarm_interval:
+                                do_alarm("stream重新连接异常", AlarmLevel.ERROR, None, None, err_msg)
+                                last_alarm_time = Timestamp.now(tz='Asia/Shanghai')
                             # 十秒后重试
                             time.sleep(10)
 
