@@ -1,10 +1,8 @@
 from td.client import TDClient
 
 from se2 import TDAccount
-from se2.domain.account import *
 from se2.domain.engine import *
 from se2.domain.time_series import *
-import datetime
 
 
 class NewSPCEStrategy(AbstractStrategy):

@@ -78,6 +78,16 @@ class TDAccount(AbstractAccount):
     @retry(limit=3)
     def do_place_order(self, order: Order):
         td_order: Dict = self.change_to_td_order(order)
+
+        # 为了防止不能获取到订单成交详情，每次下单的时候都重新订阅下账户服务
+        resub_time_start = time.time()
+        try:
+            asyncio.run(self.streamer_re_sub())
+        except:
+            import traceback
+            logging.error("resub error:{}".format(traceback.format_exc()))
+        logging.info("resub time cost:{}".format(time.time() - resub_time_start))
+
         # 如果下单失败，下面方法会抛异常
         # 该方法内部，如果下单之前获取token失败，下单操作会触发重新获取token，但是该方法会返回None
         try:
@@ -254,6 +264,12 @@ class TDAccount(AbstractAccount):
             await self.stream_client.connection.close()
         await self.stream_client.build_pipeline()
 
+    async def streamer_re_sub(self):
+        """
+        重新订阅，因为发现有些时候，在连接是正常的情况下，无法获取到订单成交的消息
+        """
+        await self.stream_client._send_message(self.stream_client._build_data_request())
+
     def start_sync_order_execution_use_stream(self):
         self.stream_client.account_activity()
 
@@ -413,7 +429,7 @@ class HeartbeatMessageHandler(AbstractMessageHandler):
         @alarm(level=AlarmLevel.ERROR, target='心跳检查', freq=Timedelta(minutes=10))
         def do_check():
             if self.last_heart_beat_time:
-                if (Timestamp.now() - self.last_heart_beat_time) > self.check_period:
+                if (Timestamp.now(tz='Asia/Shanghai') - self.last_heart_beat_time) > self.check_period:
                     raise RuntimeError("一段时间内没有收到heartbeat消息")
 
         while True:
