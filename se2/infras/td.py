@@ -38,7 +38,8 @@ class TDAccount(AbstractAccount):
             HeartbeatMessageHandler(),
             ResponseMessageHandler(),
             OrderFilledMessageHandler(self),
-            OrderRejectMessageHandler(self)
+            OrderRejectMessageHandler(self),
+            AcctActivityMessageHandler(self)
         ]
         self.stream_client: TDStreamerClient = self.client.create_streaming_session()
         self.start_sync_order_execution_use_stream()
