@@ -1,4 +1,5 @@
 import asyncio
+import json
 import xml.etree.ElementTree as ET
 
 from requests import RequestException
@@ -78,15 +79,6 @@ class TDAccount(AbstractAccount):
     @retry(limit=3)
     def do_place_order(self, order: Order):
         td_order: Dict = self.change_to_td_order(order)
-
-        # 为了防止不能获取到订单成交详情，每次下单的时候都重新订阅下账户服务
-        resub_time_start = time.time()
-        try:
-            asyncio.run(self.streamer_re_sub())
-        except:
-            import traceback
-            logging.error("resub error:{}".format(traceback.format_exc()))
-        logging.info("resub time cost:{}".format(time.time() - resub_time_start))
 
         # 如果下单失败，下面方法会抛异常
         # 该方法内部，如果下单之前获取token失败，下单操作会触发重新获取token，但是该方法会返回None
@@ -254,21 +246,43 @@ class TDAccount(AbstractAccount):
 
         threading.Thread(target=do_sync, name="sync td orders").start()
 
+    @async_alarm(level=AlarmLevel.NORMAL, target="streamer重新建立连接", freq=Timedelta(minutes=10))
+    @async_do_log(target_name="streamer重新建立连接")
+    @async_retry(limit=3, interval=3)
     async def streamer_re_connected(self):
         """
         当streamer的connection断开后，可以调用这个方法来重连， 重连后之前保存过的requests都会重新订阅
         """
-        if self.stream_client.connection and self.stream_client.connection.state \
-                and self.stream_client.connection.state == State.OPEN:
-            logging.info("streamer 断开连接")
-            await self.stream_client.connection.close()
-        await self.stream_client.build_pipeline()
+        try:
+            if self.stream_client.connection and self.stream_client.connection.state \
+                    and self.stream_client.connection.state == State.OPEN:
+                logging.info("streamer 断开连接")
+                await self.stream_client.connection.close()
+            await self.stream_client.build_pipeline()
+        except Exception as e:
+            raise RetryError(e)
 
-    async def streamer_re_sub(self):
+    @async_alarm(level=AlarmLevel.NORMAL, target="账户事件重新订阅")
+    @async_do_log(target_name="账户重新订阅")
+    @async_retry(limit=3, interval=3)
+    async def streamer_account_re_sub(self):
         """
-        重新订阅，因为发现有些时候，在连接是正常的情况下，无法获取到订单成交的消息
+        重新订阅，订阅的key的有效期是24小时，超过24小时候，需要重新获取user_principal数据，并重新订阅
         """
-        await self.stream_client._send_message(self.stream_client._build_data_request())
+        try:
+
+            user_principal_data = self.client.get_user_principals(
+                fields=['streamerConnectionInfo', 'streamerSubscriptionKeys', 'preferences', 'surrogateIds']
+            )
+            self.stream_client.user_principal_data = user_principal_data
+            request = self.stream_client._new_request_template()
+            request['service'] = 'ACCT_ACTIVITY'
+            request['command'] = 'SUBS'
+            request['parameters']['keys'] = user_principal_data['streamerSubscriptionKeys']['keys'][0]['key']
+            request['parameters']['fields'] = '0,1,2,3'
+            await self.stream_client._send_message(json.dumps({"requests": [request]}))
+        except Exception as e:
+            raise RetryError(e)
 
     def start_sync_order_execution_use_stream(self):
         self.stream_client.account_activity()
@@ -281,29 +295,18 @@ class TDAccount(AbstractAccount):
                 if message_decoded:
                     for handler in self.stream_message_handlers:
                         try:
-                            handler.process_message(message_decoded)
+                            await handler.process_message(message_decoded)
                         except:
                             import traceback
                             logging.error("处理stream消息异常:{}".format(traceback.format_exc()))
                 else:
                     # 如果消息为None，可能是connection close导致的，所以尝试重新连接
-                    alarm_interval = Timedelta(minutes=10)
-                    last_alarm_time = None
                     while True:
                         try:
                             await self.streamer_re_connected()
-                            logging.info(" streamer重新连接成功")
-                            do_alarm("streamer重新连接成功", AlarmLevel.NORMAL, None, None, None)
                             break
-                        except:
-                            import traceback
-                            err_msg = "stream重新连接异常:{}".format(traceback.format_exc())
-                            logging.error(err_msg)
-                            if last_alarm_time and (Timestamp.now(tz='Asia/Shanghai') - last_alarm_time) > alarm_interval:
-                                do_alarm("stream重新连接异常", AlarmLevel.ERROR, None, None, err_msg)
-                                last_alarm_time = Timestamp.now(tz='Asia/Shanghai')
-                            # 十秒后重试
-                            time.sleep(10)
+                        except Exception as e:
+                            time.sleep(20)
 
         threading.Thread(target=lambda: asyncio.run(do_sync()), name='sync_order_use_stream').start()
         # 等待3秒以完成stream初始化
@@ -312,7 +315,7 @@ class TDAccount(AbstractAccount):
 
 class AbstractMessageHandler(metaclass=ABCMeta):
     @abstractmethod
-    def process_message(self, message: Dict):
+    async def process_message(self, message: Dict):
         pass
 
 
@@ -325,9 +328,9 @@ class OrderFilledMessageHandler(AbstractMessageHandler):
     响应订单成交的消息
     """
 
-    @alarm(level=AlarmLevel.ERROR, target='处理成交详情',
-           escape_params=[EscapeParam(index=0, key='self')])
-    def process_message(self, message: Dict):
+    @async_alarm(level=AlarmLevel.ERROR, target='处理成交详情',
+                 escape_params=[EscapeParam(index=0, key='self')])
+    async def process_message(self, message: Dict):
         if 'data' not in message:
             return
         for single_msg in message['data']:
@@ -366,8 +369,8 @@ class OrderRejectMessageHandler(AbstractMessageHandler):
     def __init__(self, account: TDAccount):
         self.account: TDAccount = account
 
-    @alarm(level=AlarmLevel.ERROR, target='处理订单拒绝消息', escape_params=[EscapeParam(index=0, key='self')])
-    def process_message(self, message: Dict):
+    @async_alarm(level=AlarmLevel.ERROR, target='处理订单拒绝消息', escape_params=[EscapeParam(index=0, key='self')])
+    async def process_message(self, message: Dict):
         if 'data' not in message:
             return
         for single_msg in message['data']:
@@ -402,14 +405,36 @@ class OrderRejectMessageHandler(AbstractMessageHandler):
 
 class ResponseMessageHandler(AbstractMessageHandler):
 
-    @alarm(level=AlarmLevel.ERROR, target='处理响应消息',
-           escape_params=[EscapeParam(index=0, key='self')])
-    def process_message(self, message: Dict):
+    @async_alarm(level=AlarmLevel.ERROR, target='处理响应消息',
+                 escape_params=[EscapeParam(index=0, key='self')])
+    async def process_message(self, message: Dict):
         if 'response' not in message:
             return
         for resp in message['response']:
             if resp['content']['code'] != 0:
                 raise RuntimeError("错误的响应:{}".format(message))
+
+
+class AcctActivityMessageHandler(AbstractMessageHandler):
+
+    def __init__(self, account: TDAccount):
+        self.account: TDAccount = account
+
+    @async_alarm(level=AlarmLevel.ERROR, target='处理ACCT_ACTIVITY消息',
+                 escape_params=[EscapeParam(index=0, key='self')])
+    async def process_message(self, message: Dict):
+        if 'data' not in message:
+            return
+        for single_msg in message['data']:
+            if single_msg['service'] != 'ACCT_ACTIVITY':
+                continue
+            for single_content in single_msg['content']:
+                if single_content['2'] == 'ERROR' and single_content['3'] == 'EXPIRED_KEY':
+                    # key过期，需要重新获取key，然后重新订阅
+                    await self.account.streamer_account_re_sub()
+
+                elif single_content['2'] == 'ERROR':
+                    raise RuntimeError("获取到未预期到的ACCT ACTIVITY的ERROR消息")
 
 
 class HeartbeatMessageHandler(AbstractMessageHandler):
@@ -440,9 +465,9 @@ class HeartbeatMessageHandler(AbstractMessageHandler):
                 import traceback
                 logging.error("{}".format(traceback.format_exc()))
 
-    @alarm(level=AlarmLevel.ERROR, target='处理心跳消息', freq=Timedelta(minutes=10),
-           escape_params=[EscapeParam(index=0, key='self')])
-    def process_message(self, message: Dict):
+    @async_alarm(level=AlarmLevel.ERROR, target='处理心跳消息', freq=Timedelta(minutes=10),
+                 escape_params=[EscapeParam(index=0, key='self')])
+    async def process_message(self, message: Dict):
         if 'notify' not in message:
             return
         server_time = Timestamp(int(message['notify'][0]['heartbeat']), unit='ms', tz='Asia/Shanghai')

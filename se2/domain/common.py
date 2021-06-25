@@ -218,6 +218,57 @@ def alarm(level: AlarmLevel = AlarmLevel.NORMAL, target: str = None, freq: Timed
     return wrapper
 
 
+def async_alarm(level: AlarmLevel = AlarmLevel.NORMAL, target: str = None, freq: Timedelta = None,
+          escape_params: List[EscapeParam] = None):
+    last_alarm_time: Dict[str, Timestamp] = {}
+
+    async def wrapper(func: Callable):
+        async def inner_wrapper(*args, **kwargs):
+            has_exception = False
+            exception_str = None
+            exception = None
+            res = None
+            try:
+                res = await func(*args, **kwargs)
+            except Exception as e:
+                import traceback
+                exception_str = "{}".format(traceback.format_exc())
+                has_exception = True
+                exception = e
+
+            if level == AlarmLevel.ERROR and not has_exception:
+                pass
+            else:
+                new_kwargs = kwargs.copy()
+                new_kwargs['escape_params'] = escape_params
+                params_str = build_params_str(*args, **new_kwargs)
+                if not freq:
+                    do_alarm(target if target else func.__name__, level,
+                             params_str,
+                             res, exception_str)
+                    last_alarm_time[target] = Timestamp.now(tz='Asia/Shanghai')
+                else:
+                    now = Timestamp.now(tz='Asia/Shanghai')
+                    if (target not in last_alarm_time) or ((now - last_alarm_time[target]) > freq):
+                        do_alarm(target if target else func.__name__, level,
+                                 params_str,
+                                 res, exception_str)
+                        last_alarm_time[target] = now
+                    else:
+                        logging.info("由于频率控制，该告警将不会发出, target:{}, params:{}, res:{}, exception:{}".
+                                     format(target if target else func.__name__,
+                                            params_str,
+                                            res, exception_str))
+
+            if has_exception:
+                raise exception
+            else:
+                return res
+
+        return inner_wrapper
+
+    return wrapper
+
 def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
     def wrapper(func: Callable):
         def inner_wrapper(*args, **kwargs):
@@ -231,6 +282,44 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
             start_time = time.time()
             try:
                 ret_obj = func(*args, **kwargs)
+                new_kwargs = kwargs.copy()
+                new_kwargs['escape_params'] = escape_params
+                params_after = build_params_str(*args, **new_kwargs)
+            except Exception as e:
+                exception = e
+                is_exception = True
+
+            log_dict = {'params_before': params_before, 'params_after': params_after,
+                        "ret_obj": ret_obj, 'has_exception': is_exception, 'rt': time.time() - start_time}
+            name = target_name if target_name else func.__name__
+            if is_exception:
+                logging.error("{}:{}".format(name, log_dict))
+            else:
+                logging.info("{}:{}".format(name, log_dict))
+
+            if exception:
+                raise exception
+            else:
+                return ret_obj
+
+        return inner_wrapper
+
+    return wrapper
+
+
+def async_do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
+    async def wrapper(func: Callable):
+        async def inner_wrapper(*args, **kwargs):
+            new_kwargs = kwargs.copy()
+            new_kwargs['escape_params'] = escape_params
+            params_before = build_params_str(*args, **new_kwargs)
+            is_exception = False
+            params_after = None
+            exception = None
+            ret_obj = None
+            start_time = time.time()
+            try:
+                ret_obj = await func(*args, **kwargs)
                 new_kwargs = kwargs.copy()
                 new_kwargs['escape_params'] = escape_params
                 params_after = build_params_str(*args, **new_kwargs)
@@ -272,6 +361,32 @@ def retry(limit=3, interval: int = 0):
                     if k > 0:
                         logging.info("方法:{}第{}次重试".format(func.__name__, k))
                     ret = func(*args, **kwargs)
+                    return ret
+                except RetryError as e:
+                    exception = e
+                    if interval > 0:
+                        import time
+                        time.sleep(interval)
+                    continue
+            raise exception
+
+        return inner_wrapper
+
+    return wrapper
+
+
+def async_retry(limit=3, interval: int = 0):
+    if limit <= 1 or interval < 0:
+        raise RuntimeError('wrong retry parameters')
+
+    async def wrapper(func: Callable):
+        async def inner_wrapper(*args, **kwargs):
+            exception = None
+            for k in range(limit):
+                try:
+                    if k > 0:
+                        logging.info("方法:{}第{}次重试".format(func.__name__, k))
+                    ret = await func(*args, **kwargs)
                     return ret
                 except RetryError as e:
                     exception = e

@@ -1,3 +1,5 @@
+import asyncio
+
 from td.client import TDClient
 
 from se2 import TDAccount
@@ -40,6 +42,8 @@ class NewSPCEStrategy(AbstractStrategy):
                 client.validate_token()
             except Exception as e:
                 raise RetryError(e)
+            # 重新订阅账户事件，防止交易过程中因为key过期导致不能接收到账户事件
+            asyncio.run(self.account.streamer_account_re_sub())
 
     @alarm(level=AlarmLevel.ERROR, target="开盘操作", escape_params=[EscapeParam(index=0, key='self')])
     def market_open(self, event: Event):
