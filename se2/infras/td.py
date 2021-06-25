@@ -464,6 +464,7 @@ class HeartbeatMessageHandler(AbstractMessageHandler):
             except:
                 import traceback
                 logging.error("{}".format(traceback.format_exc()))
+                time.sleep(10)
 
     @async_alarm(level=AlarmLevel.ERROR, target='处理心跳消息', freq=Timedelta(minutes=10),
                  escape_params=[EscapeParam(index=0, key='self')])

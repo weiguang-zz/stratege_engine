@@ -12,7 +12,7 @@ account_name = 'td_local_spce3'
 repo: AccountRepo = BeanContainer.getBean(AccountRepo)
 # acc: TDAccount = repo.find_one(account_name)
 # if not acc:
-acc = TDAccount(account_name, 50, config.get('td', 'account_id'))
+acc = TDAccount(account_name, 150, config.get('td', 'account_id'))
 
 scope = Scope(["SPCE_STK_USD_SMART"], trading_calendar=get_calendar("NYSE"))
 

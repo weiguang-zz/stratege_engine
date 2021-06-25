@@ -1,3 +1,6 @@
+import asyncio
+
+from se2 import TDAccount
 from se2.domain.account import *
 from se2.domain.engine import *
 from se2.domain.time_series import *
@@ -14,7 +17,7 @@ class NewSPCEStrategy(AbstractStrategy):
         pass
 
     def do_initialize(self):
-        market_open = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketOpen(minute_offset=-32))
+        market_open = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketOpen(minute_offset=-4152))
         market_close = EventDefinition(tp=EventDefinitionType.TIME, time_rule=MarketClose(second_offset=0))
         ten_minute_after_market_open = EventDefinition(tp=EventDefinitionType.TIME,
                                                        time_rule=MarketOpen(minute_offset=10))
@@ -24,6 +27,8 @@ class NewSPCEStrategy(AbstractStrategy):
         # 初始化收盘价
         # self.initialize_price()
         self.last_close = 10
+        if isinstance(self.account, TDAccount):
+            asyncio.run(self.account.streamer_account_re_sub())
 
     @alarm(level=AlarmLevel.ERROR, target="开盘回调", escape_params=[EscapeParam(index=0, key='self')])
     def market_open(self, event: Event):
@@ -34,17 +39,17 @@ class NewSPCEStrategy(AbstractStrategy):
 
         # 获取到最新的开盘价格
         current_price: CurrentPrice = None
-        # allow_delay = Timedelta(seconds=5)
-        # while True:
-        #     if (Timestamp.now(tz='Asia/Shanghai') - market_open_time) > allow_delay:
-        #         raise RuntimeError("没有获取到最新价格")
-        #     current_prices = self.data_portal.current_price([self.code], None)
-        #     if self.code in current_prices:
-        #         if current_prices[self.code].visible_time >= market_open_time:
-        #             current_price = current_prices[self.code]
-        #             break
-        #     time.sleep(0.5)
-        current_price = CurrentPrice("tt", Timestamp.now(tz='Asia/Shanghai'), "SPCE_STK_USD_SMART", {"price":30, 'ask_price':31, 'ask_size':10, 'bid_price':29, 'bid_size':9})
+        allow_delay = Timedelta(seconds=5)
+        while True:
+            if (Timestamp.now(tz='Asia/Shanghai') - market_open_time) > allow_delay:
+                raise RuntimeError("没有获取到最新价格")
+            current_prices = self.data_portal.current_price([self.code], None)
+            if self.code in current_prices:
+                if current_prices[self.code].visible_time >= market_open_time:
+                    current_price = current_prices[self.code]
+                    break
+            time.sleep(0.5)
+        # current_price = CurrentPrice("tt", Timestamp.now(tz='Asia/Shanghai'), "SPCE_STK_USD_SMART", {"price":50, 'ask_price':51, 'ask_size':10, 'bid_price':49, 'bid_size':9})
         # 计算账户净值
         net_value = self.account.net_value({self.code: current_price.price})
 

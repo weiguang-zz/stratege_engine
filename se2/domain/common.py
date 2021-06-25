@@ -219,10 +219,10 @@ def alarm(level: AlarmLevel = AlarmLevel.NORMAL, target: str = None, freq: Timed
 
 
 def async_alarm(level: AlarmLevel = AlarmLevel.NORMAL, target: str = None, freq: Timedelta = None,
-          escape_params: List[EscapeParam] = None):
+                escape_params: List[EscapeParam] = None):
     last_alarm_time: Dict[str, Timestamp] = {}
 
-    async def wrapper(func: Callable):
+    def wrapper(func: Callable):
         async def inner_wrapper(*args, **kwargs):
             has_exception = False
             exception_str = None
@@ -269,6 +269,7 @@ def async_alarm(level: AlarmLevel = AlarmLevel.NORMAL, target: str = None, freq:
 
     return wrapper
 
+
 def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
     def wrapper(func: Callable):
         def inner_wrapper(*args, **kwargs):
@@ -308,7 +309,7 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
 
 
 def async_do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
-    async def wrapper(func: Callable):
+    def wrapper(func: Callable):
         async def inner_wrapper(*args, **kwargs):
             new_kwargs = kwargs.copy()
             new_kwargs['escape_params'] = escape_params
@@ -379,7 +380,7 @@ def async_retry(limit=3, interval: int = 0):
     if limit <= 1 or interval < 0:
         raise RuntimeError('wrong retry parameters')
 
-    async def wrapper(func: Callable):
+    def wrapper(func: Callable):
         async def inner_wrapper(*args, **kwargs):
             exception = None
             for k in range(limit):
