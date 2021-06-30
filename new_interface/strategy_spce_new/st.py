@@ -32,7 +32,6 @@ class NewSPCEStrategy(AbstractStrategy):
         self.initialize_price()
 
     @alarm(level=AlarmLevel.ERROR, target="盘前刷新token", escape_params=[EscapeParam(index=0, key='self')])
-    @retry(limit=3)
     def one_minute_before_market_open(self, event: Event):
         if isinstance(self.account, TDAccount):
             # 提前获取access token，防止开盘的时候获取token失败。
@@ -42,8 +41,8 @@ class NewSPCEStrategy(AbstractStrategy):
                 client.validate_token()
             except Exception as e:
                 raise RetryError(e)
-            # 重新订阅账户事件，防止交易过程中因为key过期导致不能接收到账户事件
-            asyncio.run(self.account.streamer_account_re_sub())
+            # 防止交易过程中streamer的凭证过期，所以在盘前重新创建streamer
+            asyncio.run(self.account.streamer_refresh())
 
     @alarm(level=AlarmLevel.ERROR, target="开盘操作", escape_params=[EscapeParam(index=0, key='self')])
     def market_open(self, event: Event):

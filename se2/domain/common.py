@@ -57,6 +57,16 @@ def synchronized(func):
     return synced_func
 
 
+def async_synchronized(func):
+    func.__lock__ = threading.Lock()
+
+    async def synced_func(*args, **kws):
+        with func.__lock__:
+            return await func(*args, **kws)
+
+    return synced_func
+
+
 def send_email(title: str, content: str):
     if not email_alarm_config or not email_alarm_config.is_activate:
         return
@@ -332,7 +342,8 @@ def async_do_log(target_name: str = None, escape_params: List[EscapeParam] = Non
                         "ret_obj": ret_obj, 'has_exception': is_exception, 'rt': time.time() - start_time}
             name = target_name if target_name else func.__name__
             if is_exception:
-                logging.error("{}:{}".format(name, log_dict))
+                import traceback
+                logging.error("{}:{},{}".format(name, log_dict, traceback.format_exc()))
             else:
                 logging.info("{}:{}".format(name, log_dict))
 

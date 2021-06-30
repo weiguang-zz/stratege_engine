@@ -1,11 +1,9 @@
 import asyncio
-import json
 import xml.etree.ElementTree as ET
 
 from requests import RequestException
 from td.client import TDClient
 from td.stream import TDStreamerClient
-from websockets.protocol import State
 
 from se2.domain.account import *
 from se2.domain.common import *
@@ -41,8 +39,8 @@ class TDAccount(AbstractAccount):
             OrderRejectMessageHandler(self),
             AcctActivityMessageHandler(self)
         ]
-        self.stream_client: TDStreamerClient = self.client.create_streaming_session()
-        self.start_sync_order_execution_use_stream()
+        self.streamer_client: TDStreamerClient = self.client.create_streaming_session()
+        self.start_streamer_consumer_thread()
         # self.start_sync_order_execution_thread()
 
     @alarm(level=AlarmLevel.ERROR, target="同步订单成交情况", escape_params=[EscapeParam(index=0, key='self')])
@@ -247,51 +245,32 @@ class TDAccount(AbstractAccount):
 
         threading.Thread(target=do_sync, name="sync td orders").start()
 
-    @async_alarm(level=AlarmLevel.NORMAL, target="streamer重新建立连接", freq=Timedelta(minutes=10))
-    @async_do_log(target_name="streamer重新建立连接")
+    @async_alarm(level=AlarmLevel.NORMAL, target="streamer重新建立", freq=Timedelta(minutes=10))
+    @async_do_log(target_name="streamer重新建立")
     @async_retry(limit=3, interval=3)
-    async def streamer_re_connected(self):
+    @async_synchronized
+    async def streamer_refresh(self):
         """
-        当streamer的connection断开后，可以调用这个方法来重连， 重连后之前保存过的requests都会重新订阅
+        由于一个streamer使用的凭证的有效期是24个小时，所以，当凭证过期后，需要重新初始化一个streamer
         """
         try:
-            if self.stream_client.connection and self.stream_client.connection.state \
-                    and self.stream_client.connection.state == State.OPEN:
-                logging.info("streamer 断开连接")
-                await self.stream_client.connection.close()
-            await self.stream_client.build_pipeline()
+            if self.streamer_client and self.streamer_client.connection.open:
+                await self.streamer_client.close_stream()
+
+            new_streamer = self.client.create_streaming_session()
+            new_streamer.account_activity()
+            await new_streamer.build_pipeline()
+            self.streamer_client = new_streamer
         except Exception as e:
             raise RetryError(e)
 
-    @async_alarm(level=AlarmLevel.NORMAL, target="账户事件重新订阅")
-    @async_do_log(target_name="账户重新订阅")
-    @async_retry(limit=3, interval=3)
-    async def streamer_account_re_sub(self):
-        """
-        重新订阅，订阅的key的有效期是24小时，超过24小时候，需要重新获取user_principal数据，并重新订阅
-        """
-        try:
-
-            user_principal_data = self.client.get_user_principals(
-                fields=['streamerConnectionInfo', 'streamerSubscriptionKeys', 'preferences', 'surrogateIds']
-            )
-            self.stream_client.user_principal_data = user_principal_data
-            request = self.stream_client._new_request_template()
-            request['service'] = 'ACCT_ACTIVITY'
-            request['command'] = 'SUBS'
-            request['parameters']['keys'] = user_principal_data['streamerSubscriptionKeys']['keys'][0]['key']
-            request['parameters']['fields'] = '0,1,2,3'
-            await self.stream_client._send_message(json.dumps({"requests": [request]}))
-        except Exception as e:
-            raise RetryError(e)
-
-    def start_sync_order_execution_use_stream(self):
-        self.stream_client.account_activity()
+    def start_streamer_consumer_thread(self):
+        self.streamer_client.account_activity()
 
         async def do_sync():
-            await self.stream_client.build_pipeline()
+            await self.streamer_client.build_pipeline()
             while True:
-                message_decoded = await self.stream_client.start_pipeline()
+                message_decoded = await self.streamer_client.start_pipeline()
                 logging.info("receive message:{}".format(message_decoded))
                 if message_decoded:
                     for handler in self.stream_message_handlers:
@@ -304,7 +283,7 @@ class TDAccount(AbstractAccount):
                     # 如果消息为None，可能是connection close导致的，所以尝试重新连接
                     while True:
                         try:
-                            await self.streamer_re_connected()
+                            await self.streamer_refresh()
                             break
                         except Exception as e:
                             time.sleep(20)
