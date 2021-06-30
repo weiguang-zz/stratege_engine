@@ -39,6 +39,7 @@ class TDAccount(AbstractAccount):
             OrderRejectMessageHandler(self),
             AcctActivityMessageHandler(self)
         ]
+        self.need_refresh_streamer = False
         self.streamer_client: TDStreamerClient = self.client.create_streaming_session()
         self.start_streamer_consumer_thread()
         # self.start_sync_order_execution_thread()
@@ -248,14 +249,14 @@ class TDAccount(AbstractAccount):
     @async_alarm(level=AlarmLevel.NORMAL, target="streamer重新建立", freq=Timedelta(minutes=10))
     @async_do_log(target_name="streamer重新建立")
     @async_retry(limit=3, interval=3)
-    @async_synchronized
-    async def streamer_refresh(self):
+    async def _streamer_refresh(self):
         """
         由于一个streamer使用的凭证的有效期是24个小时，所以，当凭证过期后，需要重新初始化一个streamer
         """
         try:
             if self.streamer_client and self.streamer_client.connection.open:
-                await self.streamer_client.close_stream()
+                # 注意这里不能使用streamer.close， 因为streamer.close会关闭loop，导致问题
+                await self.streamer_client.connection.close()
 
             new_streamer = self.client.create_streaming_session()
             new_streamer.account_activity()
@@ -263,6 +264,13 @@ class TDAccount(AbstractAccount):
             self.streamer_client = new_streamer
         except Exception as e:
             raise RetryError(e)
+
+    def request_refresh_streamer(self):
+        """
+        请求刷新streamer，防止因为streamer被动过期导致问题，由于streamer被监听线程使用，所以这里不能强制刷新，
+        只能设置一个标识，由监听线程来刷新streamer
+        """
+        self.need_refresh_streamer = True
 
     def start_streamer_consumer_thread(self):
         self.streamer_client.account_activity()
@@ -279,11 +287,18 @@ class TDAccount(AbstractAccount):
                         except:
                             import traceback
                             logging.error("处理stream消息异常:{}".format(traceback.format_exc()))
+                    if self.need_refresh_streamer:
+                        try:
+                            await self._streamer_refresh()
+                            self.need_refresh_streamer = False
+                        except:
+                            # 异常的化直接跳过，由下一次迭代进行刷新
+                            pass
                 else:
                     # 如果消息为None，可能是connection close导致的，所以尝试重新连接
                     while True:
                         try:
-                            await self.streamer_refresh()
+                            await self._streamer_refresh()
                             break
                         except Exception as e:
                             time.sleep(20)
