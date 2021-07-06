@@ -426,7 +426,7 @@ class AcctActivityMessageHandler(AbstractMessageHandler):
             for single_content in single_msg['content']:
                 if single_content['2'] == 'ERROR' and single_content['3'] == 'EXPIRED_KEY':
                     # key过期，需要重新获取key，然后重新订阅
-                    await self.account.streamer_account_re_sub()
+                    self.account.request_refresh_streamer()
 
                 elif single_content['2'] == 'ERROR':
                     raise RuntimeError("获取到未预期到的ACCT ACTIVITY的ERROR消息")
