@@ -132,6 +132,18 @@ class TDAccount(AbstractAccount):
                                    Timestamp.now(tz='Asia/Shanghai'), "更新订单", order.ideal_price,
                                    new_price)
             new_td_order = self.change_to_td_order(new_order)
+            # 该操作即使技术上是成功的，业务上也可能失败，因为所有订单在成交之前都需要路由到交易平台，
+            # 在这个期间原订单可能已经成交了，这个时候这个replace的订单就不会成交，比如在7.19号21:30:01
+            # 秒的单子没有成交，在21：30:13的时候进行了replace，但是replace的单子是在17秒的时候才路由到交易
+            # 平台，然而17秒的时候，第一个单子已经成交了，这就导致了replace的单子就失败了。但是由于客户端已经将订单的
+            # real_order_id改为第二个订单了，所以会导致原订单的成交详情无法感知到。
+            # (发现一个现象是，replace订单的数量开始设置的是38，但是最后取消的时候是31，这可以解释为因为replace订单在交易
+            # 平台测是跟原订单关联的，原订单是分两次成交的，第一次数量是7，所以说明在原订单第一次成交后，replace订单的数量变更了)
+
+            # 所以，modify_order接口返回后，不能认为原订单已经取消了，这个时候两个订单号都需要保留，也就是本地订单关联多个td订单
+            # 所有td订单的成交详情都应该附加到本地订单上，当感知到td订单到终态时，如果本地订单只关联了这一个td订单，则其状态为本地
+            # 订单状态，否则就将到终态的td订单id从列表中去掉。
+
             resp = self.client.modify_order(self.account_id, new_td_order, order.real_order_id)
             new_td_order_id = resp.get('order_id')
             self.real_order_id_to_order.pop(order.real_order_id)
