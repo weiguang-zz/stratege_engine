@@ -1,6 +1,7 @@
 import asyncio
 import xml.etree.ElementTree as ET
 
+import pandas as pd
 from requests import RequestException
 from td.client import TDClient
 from td.stream import TDStreamerClient
@@ -21,6 +22,7 @@ def initialize(client_id, redirect_uri, credentials_path):
         credentials_path=credentials_path
     )
     client.login()
+    TSTypeRegistry.register(TDDailyBar())
 
 
 class TDAccount(AbstractAccount):
@@ -471,3 +473,46 @@ class HeartbeatMessageHandler(AbstractMessageHandler):
         if (now - server_time) > self.allow_delay:
             raise RuntimeError("心跳消息延迟太高，消息时间:{},当前时间:{}".format(server_time, now))
         self.last_heart_beat_time = now
+
+
+class TDDailyBar(BarHistoryTimeSeriesType):
+    def load_assets(self) -> List[Asset]:
+        raise RuntimeError("not supported")
+
+    def load_history_data(self, command: HistoryDataQueryCommand) -> List[TSData]:
+        cal: TradingCalendar = trading_calendars.get_calendar('NYSE')
+        end = command.end
+        start = command.start
+        if not start:
+            window = int(command.window * 7 / 5 * 1.5)
+            start = command.end - pd.Timedelta(days=window)
+        ts_datas: List[TSData] = []
+        for code in command.codes:
+            # 对于td，只取code的第一部分
+            res = client.get_price_history(code.split("_")[0], period_type='month',
+                                           start_date=str(int(start.timestamp() * 1000)),
+                                           end_date=str(int(end.timestamp() * 1000)),
+                                           frequency_type="daily", frequency=str(1), extended_hours='false')
+            if not res['empty'] and len(res['candles']) > 0:
+                for c in res['candles']:
+                    t = pd.Timestamp(c['datetime'], unit='ms', tz='Asia/Shanghai')
+                    start_time = cal.next_open(t).tz_convert(tz='Asia/Shanghai') - Timedelta(minutes=1)
+                    visible_time = cal.next_close(t).tz_convert(tz='Asia/Shanghai')
+                    provider_data = {"start_time": start_time, "open": c['open'], "high": c['high'], "low": c['low'],
+                                     "close": c['close'], "volume": c['volume']}
+                    ts_data = TSData(self.name(), visible_time, code, self.parse(provider_data))
+                    ts_datas.append(ts_data)
+        return ts_datas
+
+    def columns(self) -> List[Column]:
+        columns = [Column("start_time", Timestamp, None, None, None), Column("open", float, None, None, None),
+                   Column("high", float, None, None, None), Column("low", float, None, None, None),
+                   Column("close", float, None, None, None), Column("volume", int, None, None, None)]
+        return columns
+
+    def name(self) -> str:
+        return 'tdDailyBar'
+
+    def __init__(self):
+        BarHistoryTimeSeriesType.__init__(self, current_price_change_start_offset=Timedelta(days=1),
+                                          current_price_change_end_offset=Timedelta(days=365 * 2))
