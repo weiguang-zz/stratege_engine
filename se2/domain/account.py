@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-import time
 import uuid
-from abc import ABCMeta, abstractmethod
 
 from se2.domain.common import *
-from se2.domain.time_series import CurrentPrice, Bar, TimeSeries
+from se2.domain.time_series import *
 
 
 class OrderStatusCallback(metaclass=ABCMeta):
@@ -62,7 +60,7 @@ class Order(metaclass=ABCMeta):
         self.account_name = None
         self.reason = reason
         self.remark = None
-        self.real_order_id = None
+        self.real_order_ids: List = []
         self.ideal_price = ideal_price
         # 成交数据
         self.filled_start_time = None
@@ -92,25 +90,37 @@ class Order(metaclass=ABCMeta):
             if self.order_status_callback:
                 self.order_status_callback.order_status_change(self)
 
-    def failed(self, reason):
+    @do_log(target_name="订单失败")
+    def failed(self, reason, real_order_id: str = None):
         if self.status == OrderStatus.FAILED:
             return
+        if real_order_id and real_order_id not in self.real_order_ids:
+            raise RuntimeError('非法的real_order_id:{}'.format(real_order_id))
         if self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED]:
-            self.failed_reason = reason
-            self.status = OrderStatus.FAILED
-            if self.order_status_callback:
-                self.order_status_callback.order_status_change(self)
-            self.save()
+            if real_order_id and len(self.real_order_ids) > 1:
+                self.real_order_ids.remove(real_order_id)
+            else:
+                self.failed_reason = reason
+                self.status = OrderStatus.FAILED
+                if self.order_status_callback:
+                    self.order_status_callback.order_status_change(self)
+                self.save()
         else:
             raise RuntimeError("非法的订单状态")
 
-    def cancelled(self, reason):
+    @do_log(target_name="订单取消")
+    def cancelled(self, reason, real_order_id: str = None):
+        if real_order_id and real_order_id not in self.real_order_ids:
+            raise RuntimeError('非法的real_order_id:{}'.format(real_order_id))
         if self.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
-            self.cancel_reason = reason
-            self.status = OrderStatus.CANCELED
-            if self.order_status_callback:
-                self.order_status_callback.order_status_change(self)
-            self.save()
+            if real_order_id and len(self.real_order_ids) > 1:
+                self.real_order_ids.remove(real_order_id)
+            else:
+                self.cancel_reason = reason
+                self.status = OrderStatus.CANCELED
+                if self.order_status_callback:
+                    self.order_status_callback.order_status_change(self)
+                self.save()
         else:
             raise RuntimeError("非法的订单状态")
 
@@ -123,7 +133,7 @@ class Order(metaclass=ABCMeta):
         pass
 
     def order_filled(self, execution: Execution):
-        if not execution.real_order_id.startswith("bt") and self.real_order_id != execution.real_order_id:
+        if not execution.real_order_id.startswith("bt") and execution.real_order_id not in self.real_order_ids:
             raise RuntimeError('非法的执行详情:{}'.format(execution.__dict__))
         if execution.id in self.executions:
             old_exec = self.executions[execution.id]
@@ -168,16 +178,12 @@ class Order(metaclass=ABCMeta):
         elif self.filled_quantity == self.quantity:
             if self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
                 self.status = OrderStatus.FILLED
-                if self.order_status_callback:
-                    self.order_status_callback.order_status_change(self)
                 self.save()
             else:
                 raise RuntimeError("非法的订单状态")
         elif self.filled_quantity > 0:
             if self.status in [OrderStatus.CREATED, OrderStatus.SUBMITTED]:
                 self.status = OrderStatus.PARTIAL_FILLED
-                if self.order_status_callback:
-                    self.order_status_callback.order_status_change(self)
             else:
                 raise RuntimeError("非法的订单状态")
 
@@ -202,12 +208,16 @@ class Order(metaclass=ABCMeta):
         self.account_name = account_name
         return self
 
-    def set_real_order_id(self, real_order_id):
-        self.real_order_id = real_order_id
+    def append_read_order_id(self, real_order_id):
+        self.real_order_ids.append(real_order_id)
 
     def save(self):
         order_repo: OrderRepo = BeanContainer.getBean(OrderRepo)
         order_repo.save(self)
+
+    def __str__(self):
+        return "direction:{}, code:{}, quantity:{}, status:{}, place_time:{}, filled_end_time:{}". \
+            format(self.direction, self.code, self.quantity, self.status, self.place_time, self.filled_end_time)
 
 
 class PriceChange(object):
@@ -235,11 +245,13 @@ class LimitOrder(Order):
     def bar_match(self, bar: Bar) -> Execution:
         if self.direction == OrderDirection.BUY:
             if bar.low <= self.limit_price:
-                return Execution(str(uuid.uuid1()), 0, self.quantity, self.limit_price,
+                # 如果bar完全在limit_price下面的话，则成交价定位high和limit_price的较低者
+                return Execution(str(uuid.uuid1()), 0, self.quantity, min(bar.high, self.limit_price),
                                  bar.visible_time, 0, 'bt')
         else:
             if bar.high >= self.limit_price:
-                return Execution(str(uuid.uuid1()), 0, self.quantity, self.limit_price,
+                # 如果bar完全在limit_price上面的话，则成交价定位low和limit_price的较高者
+                return Execution(str(uuid.uuid1()), 0, self.quantity, max(self.limit_price, bar.low),
                                  bar.visible_time, 0, 'bt')
         return None
 
@@ -253,6 +265,9 @@ class LimitOrder(Order):
                 return Execution(str(uuid.uuid1()), 0, self.quantity, current_price.price,
                                  current_price.visible_time, 0, 'bt')
         return None
+
+    def __str__(self):
+        return "limit_price:{},{}".format(self.limit_price, super(LimitOrder, self).__str__())
 
 
 class MKTOrder(Order):
@@ -274,11 +289,13 @@ class StopOrder(Order):
     def bar_match(self, bar: Bar) -> Execution:
         if self.direction == OrderDirection.BUY:
             if bar.high >= self.stop_price:
-                return Execution(str(uuid.uuid1()), 0, self.quantity, self.stop_price, bar.visible_time,
+                # 如果bar完全位于stop_price上方时，成交价设置为bar.low
+                return Execution(str(uuid.uuid1()), 0, self.quantity, max(bar.low, self.stop_price), bar.visible_time,
                                  0, "bt")
         else:
             if bar.low <= self.stop_price:
-                return Execution(str(uuid.uuid1()), 0, self.quantity, self.stop_price, bar.visible_time,
+                # 如果bar完全位于stop_price的下方时，成交价设置为bar.high
+                return Execution(str(uuid.uuid1()), 0, self.quantity, min(bar.high, self.stop_price), bar.visible_time,
                                  0, "bt")
         return None
 
@@ -436,10 +453,10 @@ class AbstractAccount(metaclass=ABCMeta):
         self.cash = initial_cash
         self.initial_cash = initial_cash
         self.positions = {}
-        self.history_net_value: Mapping[Timestamp, float] = {}
+        self.history_net_value: Dict[Timestamp, float] = {}
         self.order_status_callback = None
         # 记录该账户自初始化后新下的订单
-        self.new_placed_orders = []
+        self.new_placed_orders: List[Order] = []
         self.real_order_id_to_order: Dict[str, Order] = {}
 
     def get_order_by_real_order_id(self, real_order_id: str):
@@ -464,27 +481,36 @@ class AbstractAccount(metaclass=ABCMeta):
         """
         return self.new_placed_orders
 
+    def get_new_placed_open_orders(self) -> List[Order]:
+        res = []
+        for o in self.new_placed_orders:
+            if o.status in [OrderStatus.CREATED, OrderStatus.PARTIAL_FILLED, OrderStatus.SUBMITTED]:
+                res.append(o)
+        return res
+
     def with_order_callback(self, order_callback: OrderStatusCallback):
         self.order_status_callback = order_callback
         return self
 
-    @do_log(target_name='下单', escape_params=[EscapeParam(index=0, key='self')])
+    @do_log(target_name='下单', escape_params=[EscapeParam(index=0, key='self')], split=True)
     @alarm(target='下单', escape_params=[EscapeParam(index=0, key='self')])
     def place_order(self, order: Order):
         try:
             order.with_status_callback(self.order_status_callback).with_account(self.name)
             self.do_place_order(order)
             self.new_placed_orders.append(order)
-            self.real_order_id_to_order[order.real_order_id] = order
 
             # 由于订单拒绝消息是通过streamer异步推送过来的，所以这里尝试等待1s
-            for i in range(4):
-                time.sleep(0.25)
-                if order.status == OrderStatus.FAILED:
-                    raise RuntimeError("下单失败，原因:{}".format(order.failed_reason))
-                # 如果是市价单的话，订单很可能已经成交了
-                if order.status == OrderStatus.FILLED:
-                    return
+            if isinstance(self, BacktestAccount):
+                pass
+            else:
+                for i in range(4):
+                    time.sleep(0.25)
+                    if order.status == OrderStatus.FAILED:
+                        raise RuntimeError("下单失败，原因:{}".format(order.failed_reason))
+                    # 如果是市价单的话，订单很可能已经成交了
+                    if order.status == OrderStatus.FILLED:
+                        return
             order.submitted()
             if isinstance(order, LimitOrder) and order.bargainer:
                 order.bargainer.start_bargin()
@@ -542,11 +568,10 @@ class AbstractAccount(metaclass=ABCMeta):
         """
         pass
 
-    @do_log(target_name="订单成交", escape_params=[EscapeParam(index=0, key='self')])
-    @alarm(target='订单成交', escape_params=[EscapeParam(index=0, key='self')])
     def order_filled(self, order: Order, executions: List[Execution], replaced=False):
         pre_cash_cost = order.cash_cost()
         pre_position = order.filled_quantity if order.direction == OrderDirection.BUY else -order.filled_quantity
+        pre_order_status = order.status
 
         if not replaced:
             for execution in executions:
@@ -560,6 +585,11 @@ class AbstractAccount(metaclass=ABCMeta):
         self.cash -= after_cash_cost - pre_cash_cost
         self.update_position(order.code, after_position - pre_position)
         self.save()
+        if self.order_status_callback:
+            if pre_order_status != order.status and order.status == OrderStatus.FILLED:
+                self.order_status_callback.order_status_change(order)
+            if pre_order_status != order.status and order.status == OrderStatus.PARTIAL_FILLED:
+                self.order_status_callback.order_status_change(order)
 
     @abstractmethod
     def valid_scope(self, codes: List[str]):
@@ -622,4 +652,58 @@ class OrderRepo(metaclass=ABCMeta):
         pass
 
     def save(self, order: Order):
+        pass
+
+
+class BacktestAccount(AbstractAccount):
+
+    def __init__(self, name: str, initial_cash: float, data_portal: DataPortal):
+
+        super().__init__(name, initial_cash)
+        self.data_portal = data_portal
+
+    def match(self, data):
+        # 有时在一个bar的周期内，同时有多个订单成交，这多个订单之间可能存在一些约束关系，比如若其中一个订单成交就取消另一个
+        # 对这种情况，由于回测环境下这多个订单的成交事件都是在bar结束的时候才发出的，没有了先后关系
+        # 针对括号单的情况，如果止赢和止损都撮合成功的情况，会先成交止损单，后成交止盈单
+
+        match_result: List[Tuple[Order, Execution]] = []
+        for order in self.get_new_placed_orders():
+            if order.status not in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
+                continue
+            if isinstance(data, Bar):
+                execution = order.bar_match(data)
+            elif isinstance(data, CurrentPrice):
+                execution = order.current_price_match(data)
+            else:
+                raise RuntimeError("非法的撮合数据")
+            if execution:
+                match_result.append((order, execution))
+
+        if len(match_result) > 1:
+            logging.warning("一个时间周期内同时成交了多笔订单，data:{}".format(data.__dict__))
+        # 如果有止损单的话，先成交
+        for t in match_result:
+            if isinstance(t[0], StopOrder):
+                self.order_filled(t[0], [t[1]])
+        for t in match_result:
+            if not isinstance(t[0], StopOrder):
+                self.order_filled(t[0], [t[1]])
+
+    def do_place_order(self, order: Order):
+        if isinstance(order, LimitOrder) and order.bargainer:
+            raise RuntimeError('回测环境中不支持议价')
+        # 尝试使用当前价格进行撮合
+        cp: CurrentPrice = self.data_portal.current_price([order.code], order.place_time)[order.code]
+        execution = order.current_price_match(cp)
+        if execution:
+            self.order_filled(order, [execution])
+
+    def do_cancel_order(self, order: Order):
+        pass
+
+    def do_update_order_price(self, order, new_price):
+        raise NotImplementedError
+
+    def valid_scope(self, codes):
         pass

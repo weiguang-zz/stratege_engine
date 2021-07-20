@@ -39,44 +39,13 @@ class TDAccount(AbstractAccount):
             ResponseMessageHandler(),
             OrderFilledMessageHandler(self),
             OrderRejectMessageHandler(self),
+            OrderCancelMessageHandler(self),
             AcctActivityMessageHandler(self)
         ]
         self.need_refresh_streamer = False
         self.streamer_client: TDStreamerClient = self.client.create_streaming_session()
         self.start_streamer_consumer_thread()
         # self.start_sync_order_execution_thread()
-
-    @alarm(level=AlarmLevel.ERROR, target="同步订单成交情况", escape_params=[EscapeParam(index=0, key='self')])
-    def sync_order_execution(self, order: Order):
-        """
-        同步订单状态以及订单执行情况，使用同步的接口，非stream的方式
-        :return:
-        """
-        if not order.real_order_id:
-            raise RuntimeError("没有td订单号")
-        o: dict = self.client.get_orders(self.account_id, order.real_order_id)
-        if o.get("status") == 'CANCELED':
-            raise RuntimeError("订单在服务端已经被取消")
-
-        td_executions: List[Dict] = o.get("orderActivityCollection")
-        executions: List[Execution] = []
-        if td_executions and len(td_executions) > 0:
-            idx = 0
-            for td_execution in td_executions:
-                if not td_execution.get("executionType") == 'FILL':
-                    raise NotImplementedError
-                td_execution_legs: List[Dict] = td_execution.get("executionLegs")
-                if len(td_execution_legs) > 1:
-                    raise NotImplementedError
-                elif len(td_execution_legs) == 1:
-                    td_execution_leg = td_execution_legs[0]
-                    single_filled_quantity = td_execution_leg.get("quantity")
-                    single_filled_price = td_execution_leg.get('price')
-                    exec = Execution(str(idx), 0, single_filled_quantity, single_filled_price,
-                                     Timestamp(td_execution_leg.get("time"), tz='UTC'), 0, order.real_order_id)
-                    executions.append(exec)
-                    idx += 1
-            self.order_filled(order, executions, replaced=True)
 
     @retry(limit=3)
     def do_place_order(self, order: Order):
@@ -95,11 +64,12 @@ class TDAccount(AbstractAccount):
             raise RetryError("下单异常，可能是token过期导致的")
 
         td_order_id = resp.get('order_id')
-        order.set_real_order_id(td_order_id)
+        self.real_order_id_to_order[td_order_id] = order
+        order.append_read_order_id(td_order_id)
 
     @retry(limit=3)
     def do_cancel_order(self, order: Order):
-        if not order.real_order_id:
+        if len(order.real_order_ids) <= 0:
             raise RuntimeError("没有td订单号")
         if order.status == OrderStatus.CANCELED:
             return
@@ -110,7 +80,8 @@ class TDAccount(AbstractAccount):
         # 所以针对取消订单的逻辑，我们只针对本地的订单状态进行尝试取消，而不保证操作结果
         if order.status in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
             try:
-                self.client.cancel_order(self.account_id, order.real_order_id, timeout=(3, 3))
+                for real_order_id in order.real_order_ids:
+                    self.client.cancel_order(self.account_id, real_order_id, timeout=(3, 3))
             except RequestException as e:
                 # 通过抛出RetryError异常来让方法重试
                 raise RetryError(e)
@@ -141,13 +112,14 @@ class TDAccount(AbstractAccount):
             # 平台测是跟原订单关联的，原订单是分两次成交的，第一次数量是7，所以说明在原订单第一次成交后，replace订单的数量变更了)
 
             # 所以，modify_order接口返回后，不能认为原订单已经取消了，这个时候两个订单号都需要保留，也就是本地订单关联多个td订单
-            # 所有td订单的成交详情都应该附加到本地订单上，当感知到td订单到终态时，如果本地订单只关联了这一个td订单，则其状态为本地
+            # 所有td订单的成交详情都应该附加到本地订单上(如果是replace的话，理论上是不会存在多个订单成交的，如果存在的话，只能通过告警出来，
+            # 人工介入了)，当感知到td订单到终态[failed, cancelled]时，
+            # 如果本地订单只关联了这一个td订单，则其状态设置为本地
             # 订单状态，否则就将到终态的td订单id从列表中去掉。
 
             resp = self.client.modify_order(self.account_id, new_td_order, order.real_order_id)
             new_td_order_id = resp.get('order_id')
-            self.real_order_id_to_order.pop(order.real_order_id)
-            order.set_real_order_id(new_td_order_id)
+            order.append_read_order_id(new_td_order_id)
             self.real_order_id_to_order[new_td_order_id] = order
 
         # # 下面的操作只是尝试去取消，但是订单状态不一定是取消的
@@ -238,27 +210,6 @@ class TDAccount(AbstractAccount):
             td_order['stopPrice'] = order.stop_price
 
         return td_order
-
-    def start_sync_order_execution_thread(self):
-        """
-        启动订单执行详情同步线程，该同步方法是通过get_order的方法来进行同步的，会有比较大的延迟
-        :return:
-        """
-
-        def do_sync():
-            while True:
-                for order in self.get_new_placed_orders():
-                    if order.status not in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
-                        continue
-                    try:
-                        self.sync_order_execution(order)
-                    except:
-                        import traceback
-                        logging.error("同步订单执行详情失败{}".format(traceback.format_exc()))
-                import time
-                time.sleep(0.5)
-
-        threading.Thread(target=do_sync, name="sync td orders").start()
 
     @async_alarm(level=AlarmLevel.NORMAL, target="streamer重新建立", freq=Timedelta(minutes=10))
     @async_do_log(target_name="streamer重新建立")
@@ -373,6 +324,42 @@ class OrderFilledMessageHandler(AbstractMessageHandler):
                         self.account.order_filled(order, [e])
 
 
+class OrderCancelMessageHandler(AbstractMessageHandler):
+    def __init__(self, account: TDAccount):
+        self.account: TDAccount = account
+
+    @async_alarm(level=AlarmLevel.ERROR, target='处理订单取消消息', escape_params=[EscapeParam(index=0, key='self')])
+    async def process_message(self, message: Dict):
+        if 'data' not in message:
+            return
+        for single_msg in message['data']:
+            if single_msg['service'] != 'ACCT_ACTIVITY':
+                continue
+            for single_content in single_msg['content']:
+                if single_content['1'] != self.account.account_id or single_content['2'] not in ['UROUT']:
+                    continue
+                # 解析执行详情
+                root: ET.Element = ET.fromstring(single_content['3'])
+                order_id = root.find('{urn:xmlns:beb.ameritrade.com}Order/{urn:xmlns:beb.ameritrade.com}OrderKey').text
+                order: Order = self.account.get_order_by_real_order_id(order_id)
+                if not order:
+                    # 取消消息可能先于下单响应返回，所以这个时候在内存中是找不到这个映射的，尝试等待300ms
+                    time.sleep(0.3)
+                    order: Order = self.account.get_order_by_real_order_id(order_id)
+                if not order:
+                    logging.warning("订单:{}不是该账户发出的，取消订单消息详情将会忽略".format(order_id))
+                    # 显示告警，因为这种不正常成交详情可能是因为客户端没有及时感知到，从而导致了错误的操作
+                    do_alarm('未预期到的订单取消订单消息', AlarmLevel.ERROR, None, None, '{}'.format(message))
+                else:
+                    if order.status not in [OrderStatus.CREATED, OrderStatus.SUBMITTED]:
+                        logging.warning("订单:{}的状态不对，取消订单消息将会忽略".format(order.__dict__))
+                        do_alarm('订单的状态:{}不对，取消订单消息将会忽略'.format(order.status), AlarmLevel.ERROR, None, None,
+                                 '{}'.format(message))
+                    else:
+                        # 处理
+                        order.cancelled("UROUT", order_id)
+
+
 class OrderRejectMessageHandler(AbstractMessageHandler):
 
     def __init__(self, account: TDAccount):
@@ -409,7 +396,7 @@ class OrderRejectMessageHandler(AbstractMessageHandler):
                         # 处理
                         reject_reason_element = root.find("{urn:xmlns:beb.ameritrade.com}RejectReason")
                         reject_reason = reject_reason_element.text
-                        order.failed(reject_reason)
+                        order.failed(reject_reason, order_id)
 
 
 class ResponseMessageHandler(AbstractMessageHandler):

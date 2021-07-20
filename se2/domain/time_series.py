@@ -620,3 +620,49 @@ class TSDataRepo(metaclass=ABCMeta):
     @abstractmethod
     def query(self, ts_name, command):
         pass
+
+
+class DataPortal(object):
+    """
+    策略要获取实时价格和历史价格，都需要通过数据面板。在回测中获取实时数据其实是获取的历史某个时间点的数据，在实盘中获取实时数据是真正的实时数据。
+    """
+
+    def history_data(self, ts_type_name, command: HistoryDataQueryCommand, from_local=False):
+        ts: TimeSeries = BeanContainer.getBean(TimeSeriesRepo).find_one(ts_type_name)
+        return ts.history_data(command, from_local=from_local)
+
+    def __init__(self, is_backtest: bool, ts_type_name_for_current_price: str,
+                 subscribe_codes: List[str] = None):
+        self.ts_type_name_for_current_price = ts_type_name_for_current_price
+        self.is_backtest = is_backtest
+        self.subscribe_codes = subscribe_codes
+        ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
+        self.current_price_ts: TimeSeries = ts_repo.find_one(ts_type_name_for_current_price)
+        if not is_backtest:
+            if not subscribe_codes:
+                raise RuntimeError("need subscribe codes")
+            self.current_price_ts.subscribe(None, subscribe_codes)
+
+    def current_price(self, codes: List[str], current_time: Timestamp = None) -> Mapping[str, CurrentPrice]:
+        """
+        若在实盘环境下，current_time参数会被丢弃
+        :param delay_allowed:
+        :param codes:
+        :param current_time:
+        :return:
+        """
+        if not self.is_backtest:
+            current_time = None
+
+        ret = self.current_price_ts.current_price(codes, current_time)
+
+        # # 检查数据是否缺失或者有延迟
+        # for code in codes:
+        #     if code not in ret:
+        #         raise RuntimeError("没有获取到{}的最新价格，当前时间:{}".format(code, current_time))
+        #     cp = ret[code]
+        #     if delay_allowed:
+        #         if current_time - cp.visible_time > delay_allowed:
+        #             raise RuntimeError("没有获取到{}的最新价格，当前时间:{}, 最新价格:{}, 允许的延迟:{}".
+        #                                format(code, current_time, cp.__dict__, delay_allowed))
+        return ret

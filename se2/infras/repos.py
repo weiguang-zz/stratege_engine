@@ -62,7 +62,7 @@ class TSDataRepoImpl(TSDataRepo):
         if not isinstance(func, HistoryTimeSeriesType):
             raise RuntimeError("非法的tsType")
         for row in r.all():
-            values: Mapping[str, object] = func.deserialized(row.data)
+            values: Dict[str, object] = func.deserialized(row.data)
             visible_time = Timestamp(row.visible_time, tz='UTC').tz_convert("Asia/Shanghai")
             ts_data = TSData(row.type, visible_time, row.code, values)
             data_list.append(ts_data)
@@ -101,7 +101,7 @@ class AccountRepoImpl(AccountRepo):
         if account_model.tp == 'IBAccount':
             account = IBAccount(account_model.name, account_model.initial_cash)
         elif account_model.tp == 'BacktestAccount':
-            account = BacktestAccount(account_model.name, account_model.initial_cash)
+            account = BacktestAccount(account_model.name, account_model.initial_cash, None)
         elif account_model.tp == "TDAccount":
             account = TDAccount(account_model.name, account_model.initial_cash, account_model.account_id)
         else:
@@ -152,7 +152,7 @@ class OrderRepoImpl(OrderRepo):
                 o.filled_end_time = to_timestamp(row.filled_end_time)
                 o.filled_start_time = to_timestamp(row.filled_start_time)
                 o.fee = row.fee
-                o.real_order_id = row.real_order_id
+                o.real_order_ids = eval(row.real_order_id)
                 # 构造executions
                 executions = {}
                 for eid in row.execution_map:
@@ -172,7 +172,7 @@ class OrderRepoImpl(OrderRepo):
         kwargs = order.__dict__.copy()
         execution_model_map = {id: self._to_execution_model(order.executions[id]) for id in order.executions}
         kwargs.update({"direction": order.direction.value, "status": order.status.value,
-                       "execution_map": execution_model_map, "type": tp})
+                       "execution_map": execution_model_map, "type": tp, 'real_order_id': str(order.real_order_ids)})
         if isinstance(order, LimitOrder) and order.bargainer:
             current_price_models = [
                 CurrentPriceModel(time=current_price.visible_time, ask_price=current_price.ask_price,

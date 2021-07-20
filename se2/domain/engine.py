@@ -9,59 +9,6 @@ from se2.domain.account import *
 from se2.domain.time_series import *
 
 
-class BacktestAccount(AbstractAccount):
-
-    def __init__(self, name: str, initial_cash: float, data_portal: DataPortal):
-
-        super().__init__(name, initial_cash)
-        self.data_portal = data_portal
-
-    def match(self, data):
-        # 有时在一个bar的周期内，同时有多个订单成交，这多个订单之间可能存在一些约束关系，比如若其中一个订单成交就取消另一个
-        # 对这种情况，由于回测环境下这多个订单的成交事件都是在bar结束的时候才发出的，没有了先后关系
-        # 针对括号单的情况，如果止赢和止损都撮合成功的情况，会先成交止损单，后成交止盈单
-
-        match_result: List[Tuple[Order, Execution]] = []
-        for order in self.get_new_placed_orders():
-            if order not in [OrderStatus.SUBMITTED, OrderStatus.PARTIAL_FILLED]:
-                continue
-            if isinstance(data, Bar):
-                execution = order.bar_match(data)
-            elif isinstance(data, CurrentPrice):
-                execution = order.current_price_match(data)
-            else:
-                raise RuntimeError("非法的撮合数据")
-            match_result.append((order, execution))
-
-        if len(match_result) > 1:
-            logging.warning("一个时间周期内同时成交了多笔订单，data:{}".format(data.__dict__))
-            # 如果有止损单的话，先成交
-            for t in match_result:
-                if isinstance(t[0], StopOrder):
-                    self.order_filled(t[0], [t[1]])
-            for t in match_result:
-                if not isinstance(t[0], StopOrder):
-                    self.order_filled(t[0], [t[1]])
-
-    def do_place_order(self, order: Order):
-        if isinstance(order, LimitOrder) and order.bargin_algo:
-            raise RuntimeError('回测环境中不支持议价')
-        # 尝试使用当前价格进行撮合
-        cp: CurrentPrice = self.data_portal.current_price([order.code], order.place_time)[order.code]
-        execution = order.current_price_match(cp)
-        if execution:
-            self.order_filled(order, [execution])
-
-    def do_cancel_order(self, order: Order):
-        pass
-
-    def do_update_order_price(self, order, new_price):
-        raise NotImplementedError
-
-    def valid_scope(self, codes):
-        pass
-
-
 class EventDefinitionType(Enum):
     TIME = 0
     DATA = 1
@@ -133,6 +80,9 @@ class EventDefinition(object):
             if other.tp == EventDefinitionType.DATA:
                 return -1
             return 1
+
+    def __str__(self):
+        return "tp:{}, time_rule:{}, ts_type_name:{}".format(self.tp, self.time_rule, self.ts_type_name)
 
 
 class Event(object):
@@ -270,8 +220,12 @@ class AbstractStrategy(OrderStatusCallback, metaclass=ABCMeta):
     所有策略都应该继承这个基类， 在do_initialize方法中注册自己的事件定义以及回调。通过do_order_status_change来响应订单状态变更事件
     """
 
-    @do_log(target_name="订单状态变更", escape_params=[EscapeParam(index=0, key='self')])
+    @do_log(target_name="订单状态变更回调", escape_params=[EscapeParam(index=0, key='self')], split=True)
+    @alarm(target="订单状态变更", escape_params=[EscapeParam(index=0, key='self')])
     def order_status_change(self, order):
+        if order.status == OrderStatus.FILLED:
+            logging.info("订单成交，成交价:{}, 成交时间:{}, 订单信息:{}".format(order.filled_avg_price, order.filled_end_time,
+                                                                order))
         self.do_order_status_change(order)
 
     @abstractmethod
@@ -396,51 +350,6 @@ class AbstractStrategy(OrderStatusCallback, metaclass=ABCMeta):
         threading.Thread(name="check_realtime_data", target=check_realtime_data).start()
 
 
-class DataPortal(object):
-    """
-    策略要获取实时价格和历史价格，都需要通过数据面板。在回测中获取实时数据其实是获取的历史某个时间点的数据，在实盘中获取实时数据是真正的实时数据。
-    """
-
-    def history_data(self, ts_type_name, command: HistoryDataQueryCommand):
-        ts = BeanContainer.getBean(TimeSeriesRepo).find_one(ts_type_name)
-        return ts.history_data(command)
-
-    def __init__(self, is_backtest: bool, ts_type_name_for_current_price: str,
-                 subscribe_codes: List[str] = None):
-        self.ts_type_name_for_current_price = ts_type_name_for_current_price
-        self.is_backtest = is_backtest
-        self.subscribe_codes = subscribe_codes
-        ts_repo: TimeSeriesRepo = BeanContainer.getBean(TimeSeriesRepo)
-        self.current_price_ts: TimeSeries = ts_repo.find_one(ts_type_name_for_current_price)
-        if not is_backtest:
-            if not subscribe_codes:
-                raise RuntimeError("need subscribe codes")
-            self.current_price_ts.subscribe(None, subscribe_codes)
-
-    def current_price(self, codes: List[str], current_time: Timestamp = None) -> Mapping[str, CurrentPrice]:
-        """
-        若在实盘环境下，current_time参数会被丢弃
-        :param delay_allowed:
-        :param codes:
-        :param current_time:
-        :return:
-        """
-        if not self.is_backtest:
-            current_time = None
-
-        ret = self.current_price_ts.current_price(codes, current_time)
-
-        # # 检查数据是否缺失或者有延迟
-        # for code in codes:
-        #     if code not in ret:
-        #         raise RuntimeError("没有获取到{}的最新价格，当前时间:{}".format(code, current_time))
-        #     cp = ret[code]
-        #     if delay_allowed:
-        #         if current_time - cp.visible_time > delay_allowed:
-        #             raise RuntimeError("没有获取到{}的最新价格，当前时间:{}, 最新价格:{}, 允许的延迟:{}".
-        #                                format(code, current_time, cp.__dict__, delay_allowed))
-        return ret
-
 
 class EventLine(object):
 
@@ -486,11 +395,12 @@ class Engine(EventSubscriber):
         self.account.match(event.data)
 
     def calc_net_value(self, event: Event):
+        price_map = None
         if len(self.account.positions) > 0:
             codes = list(self.account.positions.keys())
-            cps: Mapping[str, CurrentPrice] = self.data_portal.current_price(codes, event.visible_time, None)
+            cps: Mapping[str, CurrentPrice] = self.data_portal.current_price(codes, event.visible_time)
             price_map = {code: cps[code].price for code in cps.keys()}
-            self.account.calc_net_value(price_map, event.visible_time)
+        self.account.calc_net_value(price_map, event.visible_time)
 
     def run_backtest(self, strategy: AbstractStrategy, start: Timestamp, end: Timestamp,
                      ts_type_name_for_match: str):

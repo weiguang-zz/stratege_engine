@@ -1,6 +1,7 @@
 # 该模块放置一些在所有应用中都需要解决的问题的解决方案（即领域模型），比如监控告警问题、稳定性问题（重试的实现）、依赖注入问题
 from __future__ import annotations
 import logging
+import random
 import threading
 import time
 from configparser import ConfigParser
@@ -9,6 +10,7 @@ from email.mime.text import MIMEText
 from enum import Enum
 from smtplib import SMTP_SSL
 from typing import *
+import traceback
 
 from pandas._libs.tslibs.timedeltas import Timedelta
 from pandas._libs.tslibs.timestamps import Timestamp
@@ -280,7 +282,7 @@ def async_alarm(level: AlarmLevel = AlarmLevel.NORMAL, target: str = None, freq:
     return wrapper
 
 
-def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
+def do_log(target_name: str = None, escape_params: List[EscapeParam] = None, split=False):
     def wrapper(func: Callable):
         def inner_wrapper(*args, **kwargs):
             new_kwargs = kwargs.copy()
@@ -291,7 +293,13 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
             exception = None
             ret_obj = None
             start_time = time.time()
+            name = target_name if target_name else func.__name__
+            if split:
+                # 拼接上该次调用的唯一标识
+                name = "{}[{}]".format(name, int(random.random() * 10000000))
             try:
+                if split:
+                    logging.info("{}开始，参数:{}".format(name, params_before))
                 ret_obj = func(*args, **kwargs)
                 new_kwargs = kwargs.copy()
                 new_kwargs['escape_params'] = escape_params
@@ -302,11 +310,10 @@ def do_log(target_name: str = None, escape_params: List[EscapeParam] = None):
 
             log_dict = {'params_before': params_before, 'params_after': params_after,
                         "ret_obj": ret_obj, 'has_exception': is_exception, 'rt': time.time() - start_time}
-            name = target_name if target_name else func.__name__
             if is_exception:
-                logging.error("{}:{}".format(name, log_dict))
+                logging.error("{}结束:{}, {}".format(name, log_dict, traceback.format_exc()))
             else:
-                logging.info("{}:{}".format(name, log_dict))
+                logging.info("{}结束:{}".format(name, log_dict))
 
             if exception:
                 raise exception
