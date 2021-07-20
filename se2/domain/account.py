@@ -90,7 +90,6 @@ class Order(metaclass=ABCMeta):
             if self.order_status_callback:
                 self.order_status_callback.order_status_change(self)
 
-    @do_log(target_name="订单失败")
     def failed(self, reason, real_order_id: str = None):
         if self.status == OrderStatus.FAILED:
             return
@@ -108,7 +107,6 @@ class Order(metaclass=ABCMeta):
         else:
             raise RuntimeError("非法的订单状态")
 
-    @do_log(target_name="订单取消")
     def cancelled(self, reason, real_order_id: str = None):
         if real_order_id and real_order_id not in self.real_order_ids:
             raise RuntimeError('非法的real_order_id:{}'.format(real_order_id))
