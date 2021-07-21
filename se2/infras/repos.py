@@ -184,7 +184,7 @@ class OrderRepoImpl(OrderRepo):
             kwargs.update({"bargainer": BargainerModel(current_price_history=current_price_models,
                                                        price_change_history=price_change_models,
                                                        algo_type=type(order.bargainer.algo).__name__)})
-        for name in ['extended_time', 'order_status_callback', 'executions']:
+        for name in ['extended_time', 'order_status_callback', 'executions', 'real_order_ids']:
             kwargs.pop(name)
         order_model = UserOrderModel.create(**kwargs)
         order_model.save()
